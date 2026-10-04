@@ -39,7 +39,7 @@ class Clock:
 def env():
     store, ch, clock = Store(), FakeChannel(), Clock()
     # Pacing off: these tests are about the guard and the pipeline, not the clock.
-    cfg = Config(daily_cap=2, human_pacing=False)
+    cfg = Config(daily_cap=2, human_pacing=False, two_step=False)
     return store, ch, clock, Swarm(store, ch, cfg, None, clock)
 
 

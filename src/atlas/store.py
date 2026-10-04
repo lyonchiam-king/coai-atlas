@@ -30,7 +30,14 @@ MIGRATIONS = [
     ("sends", "source", "TEXT DEFAULT ''"),
     ("inbound", "ext_id", "TEXT"),
     ("drafts", "source", "TEXT DEFAULT 'template'"),
+    ("leads", "account", "TEXT DEFAULT '1'"),
+    ("leads", "list_name", "TEXT DEFAULT ''"),
+    ("leads", "wa", "TEXT DEFAULT ''"),
+    ("sends", "account", "TEXT DEFAULT '1'"),
 ]
+
+# Replies to someone who just wrote back go before new outreach.
+KIND_ORDER = "CASE d.kind WHEN 'pitch' THEN 0 ELSE 1 END, d.id"
 
 
 class Store:
@@ -48,12 +55,13 @@ class Store:
         # Agents run on threads; sqlite3 connections are not safe to share unlocked.
         self.lock = threading.RLock()
 
-    def add_lead(self, name: str, phone: str, company: str = "", facts: dict | None = None) -> int | None:
+    def add_lead(self, name: str, phone: str, company: str = "", facts: dict | None = None,
+                 account: str = "1", list_name: str = "") -> int | None:
         with self.lock:
             try:
                 cur = self._db.execute(
-                    "INSERT INTO leads(name,phone,company,facts) VALUES(?,?,?,?)",
-                    (name, phone, company, json.dumps(facts or {}, ensure_ascii=False)))
+                    "INSERT INTO leads(name,phone,company,facts,account,list_name) VALUES(?,?,?,?,?,?)",
+                    (name, phone, company, json.dumps(facts or {}, ensure_ascii=False), account, list_name))
             except sqlite3.IntegrityError:
                 return None   # same number twice is one lead
             self._db.commit()
@@ -62,13 +70,30 @@ class Store:
     @staticmethod
     def _lead(r: sqlite3.Row) -> Lead:
         return Lead(r["id"], r["name"], r["phone"], Stage(r["stage"]), r["company"],
-                    r["notes"], r["last_contacted"], json.loads(r["facts"] or "{}"))
+                    r["notes"], r["last_contacted"], json.loads(r["facts"] or "{}"),
+                    r["account"] or "1", r["list_name"] or "", r["wa"] or "")
 
-    def leads(self, *stages: Stage) -> list[Lead]:
+    def leads(self, *stages: Stage, account: str | None = None) -> list[Lead]:
         with self.lock:
             rows = self._db.execute("SELECT * FROM leads ORDER BY id").fetchall()
         out = [self._lead(r) for r in rows]
-        return [l for l in out if not stages or l.stage in stages]
+        return [l for l in out if (not stages or l.stage in stages) and (account is None or l.account == account)]
+
+    def set_wa(self, lead_id: int, value: str) -> None:
+        with self.lock:
+            self._db.execute("UPDATE leads SET wa=? WHERE id=?", (value, lead_id))
+            self._db.commit()
+
+    def add_facts(self, lead_id: int, facts: dict) -> None:
+        """Merge in what research found. Never overwrites what the owner's list said."""
+        with self.lock:
+            r = self._db.execute("SELECT facts FROM leads WHERE id=?", (lead_id,)).fetchone()
+            cur = json.loads(r[0] or "{}")
+            for k, v in facts.items():
+                if v and k not in cur:
+                    cur[k] = v
+            self._db.execute("UPDATE leads SET facts=? WHERE id=?", (json.dumps(cur, ensure_ascii=False), lead_id))
+            self._db.commit()
 
     def lead(self, lead_id: int) -> Lead:
         with self.lock:
@@ -85,26 +110,42 @@ class Store:
         with self.lock:
             self._db.execute("UPDATE leads SET stage=?, last_contacted=? WHERE id=?",
                              (stage.value, now, lead_id))
-            self._db.execute("INSERT INTO sends(lead_id, at, text, source) VALUES(?,?,?,?)",
-                             (lead_id, now, text, source))
+            self._db.execute(
+                "INSERT INTO sends(lead_id, at, text, source, account) "
+                "VALUES(?,?,?,?,(SELECT account FROM leads WHERE id=?))",
+                (lead_id, now, text, source, lead_id))
             self._db.commit()
 
-    def sends_since(self, since: float) -> int:
+    def sends_since(self, since: float, account: str | None = None) -> int:
         with self.lock:
-            return self._db.execute("SELECT COUNT(*) FROM sends WHERE at>=?", (since,)).fetchone()[0]
+            if account is None:
+                return self._db.execute("SELECT COUNT(*) FROM sends WHERE at>=?", (since,)).fetchone()[0]
+            return self._db.execute("SELECT COUNT(*) FROM sends WHERE at>=? AND account=?",
+                                    (since, account)).fetchone()[0]
 
-    def stage_counts(self) -> dict[str, int]:
+    def stage_counts(self, account: str | None = None) -> dict[str, int]:
         with self.lock:
-            rows = self._db.execute("SELECT stage, COUNT(*) FROM leads GROUP BY stage").fetchall()
+            if account is None:
+                rows = self._db.execute("SELECT stage, COUNT(*) FROM leads GROUP BY stage").fetchall()
+            else:
+                rows = self._db.execute("SELECT stage, COUNT(*) FROM leads WHERE account=? GROUP BY stage",
+                                        (account,)).fetchall()
         return {r[0]: r[1] for r in rows}
+
+    def lists(self) -> list[dict]:
+        with self.lock:
+            rows = self._db.execute("SELECT account, list_name, COUNT(*) AS n FROM leads "
+                                    "GROUP BY account, list_name ORDER BY account, list_name").fetchall()
+        return [dict(r) for r in rows]
 
     def activity(self, limit: int = 30) -> list[dict]:
         """Recent sends and replies, newest first, for the control page."""
         q = """
-          SELECT 'out' AS dir, s.at, s.text, l.name, l.phone, '' AS intent, s.source FROM sends s
+          SELECT 'out' AS dir, s.at, s.text, l.name, l.phone, '' AS intent, s.source, l.account FROM sends s
             JOIN leads l ON l.id=s.lead_id
           UNION ALL
-          SELECT 'in', i.at, i.text, l.name, l.phone, i.intent, '' FROM inbound i JOIN leads l ON l.id=i.lead_id
+          SELECT 'in', i.at, i.text, l.name, l.phone, i.intent, '', l.account FROM inbound i
+            JOIN leads l ON l.id=i.lead_id
           ORDER BY at DESC LIMIT ?"""
         with self.lock:
             return [dict(r) for r in self._db.execute(q, (limit,)).fetchall()]
@@ -115,21 +156,32 @@ class Store:
                              (d.lead_id, d.text, d.kind, d.source))
             self._db.commit()
 
-    def pending_drafts(self) -> list[tuple[int, Draft]]:
+    def pending_drafts(self, account: str | None = None) -> list[tuple[int, Draft]]:
+        q = f"SELECT d.* FROM drafts d JOIN leads l ON l.id=d.lead_id WHERE d.sent=0"
+        args: tuple = ()
+        if account is not None:
+            q += " AND l.account=?"
+            args = (account,)
         with self.lock:
-            rows = self._db.execute("SELECT * FROM drafts WHERE sent=0 ORDER BY id").fetchall()
+            rows = self._db.execute(q + f" ORDER BY {KIND_ORDER}", args).fetchall()
         return [(r["id"], Draft(r["lead_id"], r["text"], r["kind"], r["source"])) for r in rows]
 
     def queue_view(self, limit: int = 20) -> list[dict]:
         """Drafts waiting to go, with who they are for -- what the owner reviews."""
-        q = """SELECT d.id, d.kind, d.text, d.source, l.name, l.company, l.phone
-               FROM drafts d JOIN leads l ON l.id=d.lead_id WHERE d.sent=0 ORDER BY d.id LIMIT ?"""
+        q = f"""SELECT d.id, d.kind, d.text, d.source, l.name, l.company, l.phone, l.account, l.list_name
+               FROM drafts d JOIN leads l ON l.id=d.lead_id WHERE d.sent=0 ORDER BY {KIND_ORDER} LIMIT ?"""
         with self.lock:
             return [dict(r) for r in self._db.execute(q, (limit,)).fetchall()]
 
     def last_sent_text(self, lead_id: int) -> str:
         with self.lock:
             r = self._db.execute("SELECT text FROM sends WHERE lead_id=? ORDER BY at DESC LIMIT 1",
+                                 (lead_id,)).fetchone()
+        return r[0] if r else ""
+
+    def last_inbound_text(self, lead_id: int) -> str:
+        with self.lock:
+            r = self._db.execute("SELECT text FROM inbound WHERE lead_id=? ORDER BY at DESC, id DESC LIMIT 1",
                                  (lead_id,)).fetchone()
         return r[0] if r else ""
 

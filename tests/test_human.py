@@ -44,7 +44,7 @@ def simulate_day(day, leads=30, cap=20, seed=1):
     for i in range(leads):
         store.add_lead(f"Lead{i}", f"+601234{i:05d}", f"Shop {i}", {"industry": "bakery"})
     ch = RecordingChannel(clock)
-    swarm = Swarm(store, ch, Config(daily_cap=cap), None, clock, rng=random.Random(seed))
+    swarm = Swarm(store, ch, Config(daily_cap=cap, two_step=False), None, clock, rng=random.Random(seed))
     while clock.t < at(*day, 22, 0):
         swarm.tick()
         clock.t += 60                      # auto-run wakes every minute
@@ -106,7 +106,7 @@ def test_stage_dead_draft_does_not_use_up_the_turn():
     store, clock = Store(), Clock(at(*MON, 7))
     a = store.add_lead("A", "+60123450001")
     store.add_lead("B", "+60123450002")
-    swarm = Swarm(store, ch := FakeChannel(), Config(), None, clock, rng=random.Random(1))
+    swarm = Swarm(store, ch := FakeChannel(), Config(two_step=False), None, clock, rng=random.Random(1))
     swarm.tick()                                         # 07:00: drafts written, nothing sent
     assert ch.sent == [] and len(store.pending_drafts()) == 2
     store.set_stage(a, Stage.DO_NOT_CONTACT)             # A says STOP before their turn
@@ -136,7 +136,7 @@ GOOD = ("Hi Aisha, saw that Kedai Aisha in Bayan Lepas has a 4.8 rating but no w
 
 
 def ctx_with(llm, store=None):
-    return Ctx(store or Store(), Config(human_pacing=False), llm, Clock(), random.Random(3))
+    return Ctx(store or Store(), Config(human_pacing=False, two_step=False), llm, Clock(), random.Random(3))
 
 
 def test_what_we_know_reaches_the_model_and_the_language_is_honoured():

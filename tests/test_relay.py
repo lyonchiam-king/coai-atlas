@@ -85,7 +85,7 @@ def test_relay_down_stops_the_batch_with_a_readable_reason(relay):
     for i in range(3):
         store.add_lead(f"L{i}", f"+6012345678{i}")
     relay.send_code, relay.send_reply = 503, {"status": "failed", "error": "WhatsApp is not connected"}
-    reports = Swarm(store, RelayChannel(relay.url), Config(human_pacing=False), now=Clock()).tick()
+    reports = Swarm(store, RelayChannel(relay.url), Config(human_pacing=False, two_step=False), now=Clock()).tick()
     assert reports[-1].skipped == {"send_failed: WhatsApp is not connected": 1}
     assert len(relay.sends) == 1                      # did not hammer a dead relay three times
     assert all(l.stage is Stage.NEW for l in store.leads())
@@ -100,7 +100,7 @@ def test_a_stop_from_whatsapp_reaches_the_lead_and_is_acked(relay):
     store, clock = Store(), Clock()
     lid = store.add_lead("Aisha", "+60123456789")
     ch = RelayChannel(relay.url)
-    swarm = Swarm(store, ch, Config(human_pacing=False), now=clock, inbox=ch)
+    swarm = Swarm(store, ch, Config(human_pacing=False, two_step=False), now=clock, inbox=ch)
     swarm.tick()                                       # first message goes out
     relay.inbox = [{"id": "W1", "phone": "+60123456789", "text": "stop", "at": clock.t},
                    {"id": "W2", "phone": "+6599999999", "text": "wrong number?", "at": clock.t}]

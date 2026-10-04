@@ -43,8 +43,10 @@ class DayPlan:
 
 
 class Pacer:
-    def __init__(self, store: Store, cfg: Config, rng: random.Random | None = None):
-        self.store, self.cfg = store, cfg
+    def __init__(self, store: Store, cfg: Config, rng: random.Random | None = None, account: str = "1"):
+        # One pacer per phone: each keeps its own day, quota and gaps, the way
+        # three different people would.
+        self.store, self.cfg, self.account = store, cfg, account
         self.rng = rng or random.Random()
 
     # ---- the day ---------------------------------------------------------
@@ -58,7 +60,7 @@ class Pacer:
 
     def plan(self, now: float) -> DayPlan:
         local = datetime.fromtimestamp(now, self.cfg.tz)
-        key = f"plan:{local.date().isoformat()}"
+        key = f"plan:{self.account}:{local.date().isoformat()}"
         saved = self.store.get(key)
         if saved:
             return DayPlan(**json.loads(saved))
@@ -95,17 +97,24 @@ class Pacer:
         return int(min(18_000, self.rng.uniform(4_000, 9_000) + 25 * len(text)))
 
     def next_at(self) -> float | None:
-        v = self.store.get("next_send_at")
+        v = self.store.get(f"next_send_at:{self.account}")
         return float(v) if v else None
 
     def after_send(self, now: float) -> float:
         nxt = now + self.gap_seconds()
-        self.store.put("next_send_at", repr(nxt))
+        self.store.put(f"next_send_at:{self.account}", repr(nxt))
         return nxt
 
     # ---- the decision ----------------------------------------------------
 
-    def ready(self, now: float) -> tuple[bool, str]:
+    def sent_today(self, now: float) -> int:
+        day_start = datetime.fromtimestamp(now, self.cfg.tz).replace(
+            hour=0, minute=0, second=0, microsecond=0).timestamp()
+        return self.store.sends_since(day_start, self.account)
+
+    def ready(self, now: float, priority: bool = False) -> tuple[bool, str]:
+        """priority: answering someone who just wrote back. It still waits for the
+        working day and the gap, but not for the quota -- a reply is not outreach."""
         if not self.cfg.human_pacing:
             return True, ""
         p = self.plan(now)
@@ -117,9 +126,7 @@ class Pacer:
             return False, "lunch"
         if now >= p.end:
             return False, "after_end"
-        day_start = datetime.fromtimestamp(now, self.cfg.tz).replace(
-            hour=0, minute=0, second=0, microsecond=0).timestamp()
-        if self.store.sends_since(day_start) >= p.quota:
+        if not priority and self.sent_today(now) >= p.quota:
             return False, "quota_reached"
         nxt = self.next_at()
         if nxt is not None and now < nxt:

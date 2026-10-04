@@ -32,7 +32,7 @@ class PairingRelay:
 
 def control(relay=None, cfg=None):
     store, clock = Store(), Clock()
-    cfg = cfg or Config(human_pacing=False)
+    cfg = cfg or Config(human_pacing=False, two_step=False)
     return Control(Swarm(store, FakeChannel(), cfg, now=clock), relay or PairingRelay(), every=0.05)
 
 

@@ -22,6 +22,6 @@ def may_send(lead: Lead, store: Store, cfg: Config, now: float) -> tuple[bool, s
     if not cfg.send_from_hour <= local.hour < cfg.send_until_hour:
         return False, "quiet_hours"
     day_start = local.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    if store.sends_since(day_start) >= cfg.daily_cap:
+    if store.sends_since(day_start, lead.account) >= cfg.daily_cap:   # each phone has its own cap
         return False, "daily_cap"
     return True, ""

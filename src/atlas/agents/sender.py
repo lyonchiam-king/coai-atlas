@@ -12,22 +12,25 @@ from ..models import Report, Stage
 from ..pacing import Pacer
 from . import Ctx
 
-NEXT = {"first": Stage.CONTACTED, "followup_1": Stage.FOLLOWUP_1, "followup_2": Stage.FOLLOWUP_2}
+NEXT = {"opener": Stage.OPENER_SENT, "opener_nudge": Stage.OPENER_NUDGED, "pitch": Stage.CONTACTED,
+        "first": Stage.CONTACTED, "followup_1": Stage.FOLLOWUP_1, "followup_2": Stage.FOLLOWUP_2}
 
 
 class Sender:
-    name = "sender"
+    """One per phone. Sends only this phone's leads, through this phone's relay."""
 
-    def __init__(self, channel: Channel, pacer: Pacer | None = None):
+    def __init__(self, channel: Channel, pacer: Pacer | None = None, account: str = "1"):
         self.channel = channel
         self.pacer = pacer
+        self.account = account
+        self.name = f"sender {account}"
 
     def run(self, ctx: Ctx) -> Report:
         rep = Report(self.name)
-        pacer = self.pacer or Pacer(ctx.store, ctx.cfg, ctx.rng)
-        for draft_id, d in ctx.store.pending_drafts():
+        pacer = self.pacer or Pacer(ctx.store, ctx.cfg, ctx.rng, self.account)
+        for draft_id, d in ctx.store.pending_drafts(self.account):
             now = ctx.now()
-            ready, why_not = pacer.ready(now)
+            ready, why_not = pacer.ready(now, priority=d.kind == "pitch")
             if not ready:
                 rep.skip(f"pacing: {why_not}")
                 break
