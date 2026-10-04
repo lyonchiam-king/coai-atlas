@@ -1,0 +1,19 @@
+[project]
+name = "coai-atlas"
+version = "0.1.0"
+description = "COAI Atlas: a swarm of AI sales agents for WhatsApp outreach and follow-up"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+atlas = "atlas.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
