@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS leads(
 CREATE TABLE IF NOT EXISTS drafts(
   id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, text TEXT, kind TEXT, sent INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS inbound(
-  id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, text TEXT, at REAL, intent TEXT DEFAULT '');
+  id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, text TEXT, at REAL, intent TEXT DEFAULT '',
+  ext_id TEXT UNIQUE);
 CREATE TABLE IF NOT EXISTS sends(id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, at REAL);
 """
 
@@ -90,11 +91,21 @@ class Store:
             self._db.execute("UPDATE drafts SET sent=1 WHERE lead_id=? AND sent=0", (lead_id,))
             self._db.commit()
 
-    def add_inbound(self, i: Inbound) -> None:
+    def lead_by_phone(self, phone: str) -> Lead | None:
         with self.lock:
-            self._db.execute("INSERT INTO inbound(lead_id,text,at) VALUES(?,?,?)",
-                             (i.lead_id, i.text, i.at))
+            r = self._db.execute("SELECT * FROM leads WHERE phone=?", (phone,)).fetchone()
+        return self._lead(r) if r else None
+
+    def add_inbound(self, i: Inbound, ext_id: str | None = None) -> bool:
+        """False if this exact WhatsApp message was already stored (relay re-delivery)."""
+        with self.lock:
+            try:
+                self._db.execute("INSERT INTO inbound(lead_id,text,at,ext_id) VALUES(?,?,?,?)",
+                                 (i.lead_id, i.text, i.at, ext_id))
+            except sqlite3.IntegrityError:
+                return False
             self._db.commit()
+            return True
 
     def unclassified(self) -> list[tuple[int, Inbound]]:
         with self.lock:

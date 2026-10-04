@@ -25,7 +25,15 @@ After follow-up 2 the swarm stops. Replies are for a person.
 - Daily cap starts at 20. A new WhatsApp number gets banned fast.
 - PDPA: every lead needs a lawful basis to contact. Keep the do-not-contact list.
 
-## Run
+## WhatsApp relay
+
+`whatsapp-relay/` is ported from Jarvis (Baileys). It adds inbound replies: `GET /inbox`, `POST /inbox/ack`.
+
+```bash
+cd whatsapp-relay && npm install && npm start   # then scan the QR printed at GET /qr
+```
+
+Run
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[dev]'
@@ -36,5 +44,5 @@ atlas tick          # needs the WhatsApp relay at 127.0.0.1:3001
 
 ## Not built yet
 
-The WhatsApp relay (reuse Jarvis's Baileys relay), inbound message intake from the relay,
+A QR/status screen (the relay serves /qr and /status, nothing shows them yet),
 LLM-written drafts (only a template fallback exists), a dashboard, and any multi-tenant or billing code.

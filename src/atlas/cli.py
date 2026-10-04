@@ -25,5 +25,6 @@ def main(argv=None) -> None:
         r = Intake().run(Ctx(store, Config(), TemplateLLM(), time.time), a.csv)
         print(f"imported {r.done}, skipped {r.skipped}")
     else:
-        for r in Swarm(store, RelayChannel()).tick():
+        relay = RelayChannel()
+        for r in Swarm(store, relay, inbox=relay).tick():
             print(f"{r.agent}: done={r.done} skipped={r.skipped}")

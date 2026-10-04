@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from .agents import Ctx
+from .agents.listener import Listener
 from .agents.responder import Responder
 from .agents.sender import Sender
 from .agents.writer import Writer
@@ -16,9 +17,12 @@ from .store import Store
 
 class Swarm:
     def __init__(self, store: Store, channel: Channel, cfg: Config | None = None,
-                 llm: LLM | None = None, now=time.time):
+                 llm: LLM | None = None, now=time.time, inbox=None):
         self.ctx = Ctx(store, cfg or Config(), llm or TemplateLLM(), now)
-        self.agents = [Responder(), Writer(), Sender(channel)]
+        # Listen, classify, write, send. A STOP that arrived since the last tick must
+        # be stored and acted on before anything is sent.
+        listen = [Listener(inbox)] if inbox is not None else []
+        self.agents = [*listen, Responder(), Writer(), Sender(channel)]
 
     def tick(self) -> list[Report]:
         reports = []

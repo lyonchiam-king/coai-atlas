@@ -4,3 +4,5 @@ __pycache__/
 .env
 *.db
 .whatsapp-session/
+.whatsapp-inbox.json
+node_modules/

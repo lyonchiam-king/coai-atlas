@@ -1,0 +1,18 @@
+{
+  "name": "coai-atlas-whatsapp-relay",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Baileys sidecar relay for COAI Atlas — speaks WhatsApp's multi-device protocol so the Python swarm can send messages through the user's own WhatsApp account.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.0",
+    "express": "^4.21.0",
+    "link-preview-js": "^3.0.0",
+    "qrcode": "^1.5.4",
+    "pino": "^9.4.0"
+  }
+}
