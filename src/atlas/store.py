@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS drafts(
 CREATE TABLE IF NOT EXISTS inbound(
   id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, text TEXT, at REAL, intent TEXT DEFAULT '',
   ext_id TEXT UNIQUE);
-CREATE TABLE IF NOT EXISTS sends(id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, at REAL);
+CREATE TABLE IF NOT EXISTS sends(id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER, at REAL, text TEXT DEFAULT '');
 """
 
 
@@ -58,17 +58,32 @@ class Store:
             self._db.execute("UPDATE leads SET stage=? WHERE id=?", (stage.value, lead_id))
             self._db.commit()
 
-    def mark_sent(self, lead_id: int, stage: Stage, now: float | None = None) -> None:
+    def mark_sent(self, lead_id: int, stage: Stage, now: float | None = None, text: str = "") -> None:
         now = time.time() if now is None else now
         with self.lock:
             self._db.execute("UPDATE leads SET stage=?, last_contacted=? WHERE id=?",
                              (stage.value, now, lead_id))
-            self._db.execute("INSERT INTO sends(lead_id, at) VALUES(?,?)", (lead_id, now))
+            self._db.execute("INSERT INTO sends(lead_id, at, text) VALUES(?,?,?)", (lead_id, now, text))
             self._db.commit()
 
     def sends_since(self, since: float) -> int:
         with self.lock:
             return self._db.execute("SELECT COUNT(*) FROM sends WHERE at>=?", (since,)).fetchone()[0]
+
+    def stage_counts(self) -> dict[str, int]:
+        with self.lock:
+            rows = self._db.execute("SELECT stage, COUNT(*) FROM leads GROUP BY stage").fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    def activity(self, limit: int = 30) -> list[dict]:
+        """Recent sends and replies, newest first, for the control page."""
+        q = """
+          SELECT 'out' AS dir, s.at, s.text, l.name, l.phone, '' AS intent FROM sends s JOIN leads l ON l.id=s.lead_id
+          UNION ALL
+          SELECT 'in', i.at, i.text, l.name, l.phone, i.intent FROM inbound i JOIN leads l ON l.id=i.lead_id
+          ORDER BY at DESC LIMIT ?"""
+        with self.lock:
+            return [dict(r) for r in self._db.execute(q, (limit,)).fetchall()]
 
     def add_draft(self, d: Draft) -> None:
         with self.lock:

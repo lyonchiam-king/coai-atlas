@@ -73,9 +73,26 @@ def test_unconfirmed_counts_as_sent_but_failed_and_http_errors_raise(relay):
     relay.send_reply = {"status": "failed", "error": "boom"}
     with pytest.raises(RelayError, match="boom"):     # 200 with status failed
         ch.send("+60123456789", "x")
-    relay.send_code, relay.send_reply = 503, {"status": "failed"}
-    with pytest.raises(Exception):                    # HTTP 503: not connected
+    relay.send_code, relay.send_reply = 503, {"status": "failed", "error": "WhatsApp is not connected"}
+    with pytest.raises(RelayError, match="not connected") as e:   # the relay's words, not "HTTPError"
         ch.send("+60123456789", "x")
+    assert e.value.stop_batch
+
+
+def test_relay_down_stops_the_batch_with_a_readable_reason(relay):
+    store = Store()
+    for i in range(3):
+        store.add_lead(f"L{i}", f"+6012345678{i}")
+    relay.send_code, relay.send_reply = 503, {"status": "failed", "error": "WhatsApp is not connected"}
+    reports = Swarm(store, RelayChannel(relay.url), now=Clock()).tick()
+    assert reports[-1].skipped == {"send_failed: WhatsApp is not connected": 1}
+    assert len(relay.sends) == 1                      # did not hammer a dead relay three times
+    assert all(l.stage is Stage.NEW for l in store.leads())
+
+
+def test_relay_not_running_is_named():
+    with pytest.raises(RelayError, match="not running"):
+        RelayChannel("http://127.0.0.1:9", timeout=2).send("+60123456789", "x")
 
 
 def test_a_stop_from_whatsapp_reaches_the_lead_and_is_acked(relay):
