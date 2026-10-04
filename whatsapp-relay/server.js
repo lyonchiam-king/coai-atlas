@@ -19,6 +19,7 @@ const {
 } = require("@whiskeysockets/baileys");
 const QRCode = require("qrcode");
 const { extractInbound, Inbox } = require("./inbox");
+const { ContactBook } = require("./contacts");
 const pino = require("pino");
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,10 @@ const acks = new Map();
 // relay restart between a reply and the next poll does not lose the one message
 // that matters most -- a STOP.
 const inbox = new Inbox(process.env.INBOX_FILE || ".whatsapp-inbox.json");
+
+// Everyone this phone has chatted with, so a list that lives only inside
+// WhatsApp can be imported. Filled from history sync after linking.
+const contacts = new ContactBook(process.env.CONTACTS_FILE || ".whatsapp-contacts.json");
 
 // message id -> the content we sent under it.
 //
@@ -306,6 +311,39 @@ async function connect() {
         // A message we cannot read must never take the relay down.
         logger.warn({ err }, "Could not read an inbound message");
       }
+    }
+  });
+
+  // History sync and contact changes. Each handler is wrapped: a malformed
+  // batch must never take the relay down, and contacts are a convenience.
+  sock.ev.on("messaging-history.set", ({ chats, contacts: people }) => {
+    if (gen !== generation) return;
+    try {
+      contacts.addContacts(people);
+      contacts.addChats(chats);
+      contacts.save();
+    } catch (err) {
+      logger.warn({ err }, "Could not read history sync");
+    }
+  });
+  for (const ev of ["contacts.upsert", "contacts.update"]) {
+    sock.ev.on(ev, (people) => {
+      if (gen !== generation) return;
+      try {
+        contacts.addContacts(people);
+        contacts.save();
+      } catch (err) {
+        logger.warn({ err }, "Could not read contacts");
+      }
+    });
+  }
+  sock.ev.on("chats.upsert", (chats) => {
+    if (gen !== generation) return;
+    try {
+      contacts.addChats(chats);
+      contacts.save();
+    } catch (err) {
+      logger.warn({ err }, "Could not read chats");
     }
   });
 
@@ -677,6 +715,58 @@ app.post("/check", async (req, res) => {
       if (!res.headersSent) {
         res.status(500).json({ error: err.message || "check failed" });
       }
+    }
+  });
+});
+
+// GET /contacts -- everyone this phone has chatted with, for importing a list.
+app.get("/contacts", (_req, res) => {
+  res.json({ contacts: contacts.list() });
+});
+
+// POST /profile -- { phone }: what the person shows publicly on WhatsApp.
+// The About line for anyone; category, description and website for a WhatsApp
+// Business account. Free research for the writer. Paced through the send queue
+// like /check, and every part optional: a private About is not an error.
+app.post("/profile", async (req, res) => {
+  const digits = String((req.body || {}).phone || "").replace(/[^0-9]/g, "");
+  if (digits.length < 8 || digits.length > 15 || digits.startsWith("0")) {
+    return res.status(400).json({ error: "phone must be in international format" });
+  }
+  if (!connected || !sock) {
+    return res.status(503).json({ error: "WhatsApp is not connected" });
+  }
+  const jid = digits + "@s.whatsapp.net";
+  sendQueue = sendQueue.then(async () => {
+    const out = { about: "", business: {} };
+    try {
+      const wait = Math.max(0, CHECK_INTERVAL_MS - (Date.now() - lastCheckTime));
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      try {
+        const list = await sock.fetchStatus(jid);
+        const entry = (list || [])[0];
+        const st = entry && entry.status;
+        out.about = String((st && typeof st === "object" ? st.status : st) || "");
+      } catch (err) {
+        logger.warn({ err, phone: digits }, "About not available");
+      }
+      try {
+        const biz = await sock.getBusinessProfile(jid);
+        if (biz) {
+          out.business = {
+            category: biz.category || "",
+            description: biz.description || "",
+            website: Array.isArray(biz.website) ? biz.website.join(" ") : biz.website || "",
+            address: biz.address || "",
+          };
+        }
+      } catch (err) {
+        // Most people are not business accounts; this failing is normal.
+      }
+      lastCheckTime = Date.now();
+      res.json(out);
+    } catch (err) {
+      if (!res.headersSent) res.status(500).json({ error: err.message || "profile failed" });
     }
   });
 });

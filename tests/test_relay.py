@@ -21,7 +21,7 @@ class FakeRelay:
     """A real HTTP server speaking the relay's protocol, so RelayChannel is exercised for real."""
 
     def __init__(self):
-        self.sends, self.acked, self.inbox = [], [], []
+        self.sends, self.acked, self.inbox, self.checked = [], [], [], []
         self.send_reply, self.send_code = {"status": "sent"}, 200
         outer = self
 
@@ -36,13 +36,22 @@ class FakeRelay:
                 self.wfile.write(raw)
 
             def do_GET(self):
-                self._json(200, {"messages": outer.inbox} if self.path == "/inbox" else {"connected": True})
+                if self.path == "/inbox":
+                    return self._json(200, {"messages": outer.inbox})
+                if self.path == "/contacts":
+                    return self._json(200, {"contacts": [{"phone": "+60123456789", "name": "Aisha", "notify": "", "last_chat": 1}]})
+                self._json(200, {"connected": True})
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 if self.path == "/send":
                     outer.sends.append(body)
                     self._json(outer.send_code, outer.send_reply)
+                elif self.path == "/check":
+                    outer.checked.append(body["phones"])
+                    self._json(200, {"results": {p: {"registered": p.endswith("9")} for p in body["phones"]}})
+                elif self.path == "/profile":
+                    self._json(200, {"about": "Hey there", "business": {"category": "Bakery"}})
                 else:
                     outer.acked += body["ids"]
                     self._json(200, {"removed": len(body["ids"])})
@@ -83,7 +92,7 @@ def test_unconfirmed_counts_as_sent_but_failed_and_http_errors_raise(relay):
 def test_relay_down_stops_the_batch_with_a_readable_reason(relay):
     store = Store()
     for i in range(3):
-        store.add_lead(f"L{i}", f"+6012345678{i}")
+        store.set_wa(store.add_lead(f"L{i}", f"+6012345678{i}"), "yes")   # already checked
     relay.send_code, relay.send_reply = 503, {"status": "failed", "error": "WhatsApp is not connected"}
     reports = Swarm(store, RelayChannel(relay.url), Config(human_pacing=False, two_step=False), now=Clock()).tick()
     assert reports[-1].skipped == {"send_failed: WhatsApp is not connected": 1}
@@ -152,3 +161,19 @@ def test_the_ported_relay_keeps_the_fixes_jarvis_learned_the_hard_way():
 def test_inbound_parsing_under_node():
     r = subprocess.run(["node", "--test"], cwd=RELAY, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_check_profile_and_contacts_speak_the_relays_protocol(relay):
+    ch = RelayChannel(relay.url)
+    assert ch.check(["+60123456789", "+60123456780"]) == {
+        "+60123456789": {"registered": True}, "+60123456780": {"registered": False}}
+    assert relay.checked == [["+60123456789", "+60123456780"]]
+    assert ch.profile("+60123456789")["business"]["category"] == "Bakery"
+    assert ch.contacts()[0]["name"] == "Aisha"
+
+
+def test_relay_profile_and_contacts_routes_are_wired():
+    raw = (RELAY / "server.js").read_text()
+    for needle in ('app.get("/contacts"', 'app.post("/profile"', "sock.fetchStatus(jid)",
+                   "sock.getBusinessProfile(jid)", '"messaging-history.set"', "contacts.addChats(chats)"):
+        assert needle in raw, needle

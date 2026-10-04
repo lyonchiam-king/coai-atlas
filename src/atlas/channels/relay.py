@@ -53,6 +53,16 @@ class RelayChannel:
         """A data: URL of the pairing QR, or None once paired."""
         return self._call("/qr").get("qr")
 
+    def check(self, phones: list[str]) -> dict:
+        """{phone: {"registered": True | False | None}}. None means the lookup failed, not "no"."""
+        return self._call("/check", {"phones": list(phones)}).get("results", {})
+
+    def profile(self, phone: str) -> dict:
+        return self._call("/profile", {"phone": phone})
+
+    def contacts(self) -> list[dict]:
+        return self._call("/contacts").get("contacts", [])
+
     def poll(self) -> list[dict]:
         return self._call("/inbox").get("messages", [])
 

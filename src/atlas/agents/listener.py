@@ -13,7 +13,12 @@ class Listener:
     def run(self, ctx: Ctx) -> Report:
         rep = Report(self.name)
         seen: list[str] = []
-        for m in self.source.poll():
+        try:
+            incoming = self.source.poll()
+        except Exception as e:      # a phone not linked yet is a state, not a crash
+            rep.skip(f"relay: {e}")
+            return rep
+        for m in incoming:
             # Stored whichever phone it reached: a STOP sent to the "wrong" phone of
             # ours is still a STOP.
             lead = ctx.store.lead_by_phone(m["phone"])

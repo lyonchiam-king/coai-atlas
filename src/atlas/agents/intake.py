@@ -1,35 +1,34 @@
 from __future__ import annotations
 
-import csv
-import io
-
+from ..importers import parse_contacts
 from ..models import Report
 from ..phone import to_e164
 from . import Ctx
 
 
 class Intake:
+    """Rows from any importer -> leads on one phone, in one named list."""
+
     name = "intake"
 
-    def run(self, ctx: Ctx, csv_path: str) -> Report:
-        with open(csv_path, newline="", encoding="utf-8-sig") as f:
-            return self.run_rows(ctx, csv.DictReader(f))
+    def run(self, ctx: Ctx, path: str, account: str = "1", list_name: str = "") -> Report:
+        with open(path, encoding="utf-8-sig", errors="replace") as f:
+            return self.run_text(ctx, f.read(), account, list_name)
 
-    def run_text(self, ctx: Ctx, text: str) -> Report:
-        """CSV pasted into the control page."""
-        return self.run_rows(ctx, csv.DictReader(io.StringIO(text.lstrip("\ufeff").strip())))
+    def run_text(self, ctx: Ctx, text: str, account: str = "1", list_name: str = "") -> Report:
+        """A pasted or uploaded file: vCard or CSV."""
+        return self.run_rows(ctx, parse_contacts(text), account, list_name)
 
-    def run_rows(self, ctx: Ctx, rows) -> Report:
+    def run_rows(self, ctx: Ctx, rows, account: str = "1", list_name: str = "") -> Report:
         rep = Report(self.name)
         for row in rows:
-            # Headers typed by hand in Excel arrive as "Phone " or "NAME".
-            row = {(k or "").strip().lower(): (v or "") for k, v in row.items()}
             phone = to_e164(row.get("phone", ""), ctx.cfg.country)
             if not phone:
                 rep.skip("bad_phone")
             elif ctx.store.add_lead(row.get("name", "").strip(), phone, row.get("company", "").strip(),
-                                    {k: v.strip() for k, v in row.items()
-                                     if k and k not in ("name", "phone", "company") and v.strip()}) is None:
+                                    row.get("facts") or {}, account, list_name) is None:
+                # Already on a list -- possibly another phone's. It stays where it is,
+                # so nobody hears from two of your phones.
                 rep.skip("duplicate")
             else:
                 rep.done += 1

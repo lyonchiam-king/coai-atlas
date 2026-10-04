@@ -179,6 +179,15 @@ class Store:
                                  (lead_id,)).fetchone()
         return r[0] if r else ""
 
+    def replied_view(self, limit: int = 30) -> list[dict]:
+        """People who answered and are waiting for the owner, newest reply first."""
+        q = """SELECT l.id, l.name, l.company, l.phone, l.account, l.list_name, l.stage,
+                      (SELECT text FROM inbound i WHERE i.lead_id=l.id ORDER BY at DESC, id DESC LIMIT 1) AS last_text,
+                      (SELECT MAX(at) FROM inbound i WHERE i.lead_id=l.id) AS last_at
+               FROM leads l WHERE l.stage='replied' ORDER BY last_at DESC LIMIT ?"""
+        with self.lock:
+            return [dict(r) for r in self._db.execute(q, (limit,)).fetchall()]
+
     def last_inbound_text(self, lead_id: int) -> str:
         with self.lock:
             r = self._db.execute("SELECT text FROM inbound WHERE lead_id=? ORDER BY at DESC, id DESC LIMIT 1",

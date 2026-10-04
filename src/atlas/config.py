@@ -8,6 +8,7 @@ from datetime import timedelta, timezone
 class Config:
     country: str = "MY"
     tz: timezone = timezone(timedelta(hours=8))   # Penang has no DST
+    tz_name: str = "Asia/Kuala_Lumpur"            # the same zone, for the page's clocks
     # Hard outer bounds, enforced by the guard whatever pacing says.
     send_from_hour: int = 9                        # local time, inclusive
     send_until_hour: int = 21                      # exclusive
