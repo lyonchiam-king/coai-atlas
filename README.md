@@ -12,8 +12,25 @@ One `tick` runs the agents in a fixed order. The order is the safety property.
 | Listener | Pulls replies from the WhatsApp relay. Acks only after storing, so a STOP is never lost |
 | Intake | CSV of name, phone, company -> leads. Normalises to E.164, drops bad and duplicate numbers |
 | Responder | Classifies inbound messages. STOP -> do-not-contact; any reply -> hand over to a human. Cancels queued drafts |
-| Writer | Drafts the first message, follow-up 1 (day 2) and follow-up 2 (day 5+). Drafts in parallel |
-| Sender | Sends through the guard: stage, quiet hours (09:00-21:00 MYT), daily cap. One bad send never stops the queue |
+| Writer | One message per lead, written by Claude from what the CSV says about them (industry, area, notes, language). Falls back to varied templates. Follow-ups land 2-3 and 5-6 days later, staggered per lead |
+| Sender | One message at a time on a human schedule (below), always inside the guard: stage, 09:00-21:00 MYT, daily cap |
+
+## Human schedule
+
+- Mon-Sat. Sunday off.
+- Each day starts at a random time between 09:15 and 10:30 and stops between 17:30 and 18:45.
+- Lunch 12:30-14:00; Friday 12:15-14:45 for Jumaat.
+- 3-25 minutes between messages, usually about 7, with an occasional 25-50 minute break.
+- Each day sends 60-100% of the daily cap, not the same number every day.
+- "typing..." shows for 4-18 seconds before each message.
+
+## AI-written messages
+
+Copy `.env.example` to `.env` and paste an Anthropic API key. Without one, Atlas uses templates.
+Add any columns you know to the CSV -- `industry`, `area`, `notes`, `hook`, `language` (en / ms / zh) -- and
+the writer uses them. `notes` are private context for the AI and are never pasted into a template;
+`hook` is a line written for the message itself. Templates are English only; AI messages follow `language`. Every message is checked (no links, no placeholders, no invented opt-out, sensible
+length) before it can be queued; one that fails is replaced by a template. Read them in "Next to send".
 
 Pipeline: new -> contacted -> followup_1 -> followup_2 -> (replied | won | lost | do_not_contact).
 After follow-up 2 the swarm stops. Replies are for a person.

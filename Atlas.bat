@@ -6,9 +6,15 @@ cd /d "%~dp0"
 where node >nul 2>nul || (echo Node.js is not installed. Install the LTS version from https://nodejs.org then run this again. & pause & exit /b 1)
 where python >nul 2>nul || (echo Python is not installed. Install Python 3.11+ from https://python.org and tick "Add to PATH". & pause & exit /b 1)
 
-REM Atlas uses only the Python standard library, so there is nothing to install:
-REM pointing Python at src\ is the whole setup, and it works offline.
+REM Atlas itself is plain Python: pointing Python at src\ is the whole setup.
 set "PYTHONPATH=%~dp0src"
+
+REM The one optional library: Claude for AI-written messages. Without it, or
+REM without ANTHROPIC_API_KEY in .env, Atlas still runs and uses templates.
+python -c "import anthropic" >nul 2>nul || (
+  echo Installing the AI writer library...
+  python -m pip install --user -q anthropic || echo Could not install it. Messages will use templates.
+)
 
 if not exist whatsapp-relay\node_modules (
   echo First run: installing the WhatsApp relay...

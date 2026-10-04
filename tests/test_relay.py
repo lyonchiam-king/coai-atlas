@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from atlas.channels.relay import RelayChannel, RelayError
+from atlas.config import Config
 from atlas.models import Inbound, Stage
 from atlas.store import Store
 from atlas.swarm import Swarm
@@ -62,8 +63,8 @@ def relay():
 
 
 def test_send_uses_the_field_names_the_relay_reads(relay):
-    RelayChannel(relay.url).send("+60123456789", "hello")
-    assert relay.sends == [{"phone": "+60123456789", "message": "hello"}]
+    RelayChannel(relay.url).send("+60123456789", "hello", typing_ms=5000)
+    assert relay.sends == [{"phone": "+60123456789", "message": "hello", "typing_ms": 5000}]
 
 
 def test_unconfirmed_counts_as_sent_but_failed_and_http_errors_raise(relay):
@@ -84,7 +85,7 @@ def test_relay_down_stops_the_batch_with_a_readable_reason(relay):
     for i in range(3):
         store.add_lead(f"L{i}", f"+6012345678{i}")
     relay.send_code, relay.send_reply = 503, {"status": "failed", "error": "WhatsApp is not connected"}
-    reports = Swarm(store, RelayChannel(relay.url), now=Clock()).tick()
+    reports = Swarm(store, RelayChannel(relay.url), Config(human_pacing=False), now=Clock()).tick()
     assert reports[-1].skipped == {"send_failed: WhatsApp is not connected": 1}
     assert len(relay.sends) == 1                      # did not hammer a dead relay three times
     assert all(l.stage is Stage.NEW for l in store.leads())
@@ -99,7 +100,7 @@ def test_a_stop_from_whatsapp_reaches_the_lead_and_is_acked(relay):
     store, clock = Store(), Clock()
     lid = store.add_lead("Aisha", "+60123456789")
     ch = RelayChannel(relay.url)
-    swarm = Swarm(store, ch, now=clock, inbox=ch)
+    swarm = Swarm(store, ch, Config(human_pacing=False), now=clock, inbox=ch)
     swarm.tick()                                       # first message goes out
     relay.inbox = [{"id": "W1", "phone": "+60123456789", "text": "stop", "at": clock.t},
                    {"id": "W2", "phone": "+6599999999", "text": "wrong number?", "at": clock.t}]
@@ -142,6 +143,9 @@ def test_the_ported_relay_keeps_the_fixes_jarvis_learned_the_hard_way():
     assert "EADDRINUSE" in js                          # port is the single-instance lock
     assert "generation" in js                          # superseded sockets are inert
     assert "messages.upsert" in js and "/inbox/ack" in js
+    # typing is capped and cosmetic: it sits inside its own try, before the send
+    assert "Math.min(TYPING_MAX_MS" in js
+    assert js.index('sendPresenceUpdate("composing"') < js.index("sock.sendMessage(jid, payload)")
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

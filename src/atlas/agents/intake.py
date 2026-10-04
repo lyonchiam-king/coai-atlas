@@ -27,7 +27,9 @@ class Intake:
             phone = to_e164(row.get("phone", ""), ctx.cfg.country)
             if not phone:
                 rep.skip("bad_phone")
-            elif ctx.store.add_lead(row.get("name", "").strip(), phone, row.get("company", "").strip()) is None:
+            elif ctx.store.add_lead(row.get("name", "").strip(), phone, row.get("company", "").strip(),
+                                    {k: v.strip() for k, v in row.items()
+                                     if k and k not in ("name", "phone", "company") and v.strip()}) is None:
                 rep.skip("duplicate")
             else:
                 rep.done += 1

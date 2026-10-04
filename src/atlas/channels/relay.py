@@ -18,9 +18,9 @@ class RelayError(RuntimeError):
 
 
 class RelayChannel:
-    def __init__(self, url: str = "http://127.0.0.1:3001", timeout: float = 60):
-        # Sends are paced inside the relay (15s apart by default) and wait for an
-        # ack, so the timeout has to cover a queue, not a single message.
+    def __init__(self, url: str = "http://127.0.0.1:3001", timeout: float = 90):
+        # A send can wait for the relay's 15s spacing, up to 20s of "typing...",
+        # and an 8s ack, so the timeout covers all three, not just the transfer.
         self.url, self.timeout = url.rstrip("/"), timeout
 
     def _call(self, path: str, body: dict | None = None) -> dict:
@@ -39,8 +39,8 @@ class RelayChannel:
         except urllib.error.URLError as e:
             raise RelayError("WhatsApp relay is not running", stop_batch=True) from None
 
-    def send(self, phone: str, text: str) -> None:
-        reply = self._call("/send", {"phone": phone, "message": text})
+    def send(self, phone: str, text: str, typing_ms: int = 0) -> None:
+        reply = self._call("/send", {"phone": phone, "message": text, "typing_ms": int(typing_ms)})
         # The relay answers 200 with status "failed" for errors inside sendMessage.
         # "unconfirmed" means the message left but WhatsApp has not acked yet: sent.
         if reply.get("status") not in ("sent", "unconfirmed"):

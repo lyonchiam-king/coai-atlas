@@ -29,6 +29,13 @@ class Lead:
     company: str = ""
     notes: str = ""
     last_contacted: float | None = None   # unix seconds
+    # Everything else we know, straight from the CSV: industry, area, rating,
+    # language, anything. The writer turns these into a message about *them*.
+    facts: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def first_name(self) -> str:
+        return self.name.split()[0] if self.name.strip() else "there"
 
 
 @dataclass
@@ -36,6 +43,7 @@ class Draft:
     lead_id: int
     text: str
     kind: str             # first | followup_1 | followup_2
+    source: str = "template"   # "ai" or "template", shown on the page
 
 
 @dataclass

@@ -35,6 +35,7 @@ const MIN_INTERVAL_MS = parseInt(process.env.MIN_INTERVAL_SECONDS || "15", 10) *
 const CHECK_INTERVAL_MS =
   parseInt(process.env.CHECK_INTERVAL_SECONDS || "3", 10) * 1000;
 const CHECK_MAX_PER_REQUEST = parseInt(process.env.CHECK_MAX_PER_REQUEST || "50", 10);
+const TYPING_MAX_MS = 20000;
 const ACK_TIMEOUT_MS = parseInt(process.env.ACK_TIMEOUT_SECONDS || "8", 10) * 1000;
 
 // ---------------------------------------------------------------------------
@@ -445,7 +446,7 @@ app.post("/send", async (req, res) => {
   // `image` is optional base64 PNG/JPEG bytes. With one, the message goes
   // as a picture with the text as its caption -- a screenshot of the site
   // says more in a phone notification than a link nobody taps.
-  const { phone, message, image } = req.body || {};
+  const { phone, message, image, typing_ms } = req.body || {};
 
   if (!phone || !message) {
     return res.status(400).json({
@@ -518,6 +519,21 @@ app.post("/send", async (req, res) => {
       // than the truth -- and refusing on it stops the send outright. It is
       // reported alongside the result instead.
       const unregistered = registered === false;
+
+      // "typing..." for a few seconds first, as a person would. Atlas picks the
+      // length; capped here so a bad value cannot hold the send queue hostage.
+      // Cosmetic only: a failure here must never cost the message.
+      const typingMs = Math.max(0, Math.min(TYPING_MAX_MS, parseInt(typing_ms, 10) || 0));
+      if (typingMs > 0) {
+        try {
+          await sock.presenceSubscribe(jid);
+          await sock.sendPresenceUpdate("composing", jid);
+          await new Promise((r) => setTimeout(r, typingMs));
+          await sock.sendPresenceUpdate("paused", jid);
+        } catch (err) {
+          logger.warn({ err, phone }, "Typing indicator failed; sending anyway");
+        }
+      }
 
       let payload = { text: message };
       if (image) {

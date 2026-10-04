@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import random
+from dataclasses import dataclass, field
 from typing import Callable
 
 from ..config import Config
@@ -12,5 +13,6 @@ from ..store import Store
 class Ctx:
     store: Store
     cfg: Config
-    llm: LLM
+    llm: LLM | None          # None = templates only
     now: Callable[[], float]
+    rng: random.Random = field(default_factory=random.Random)

@@ -18,7 +18,9 @@ from .agents.intake import Intake
 from .models import Report
 from .swarm import Swarm
 
-AUTO_EVERY = 300   # seconds between automatic runs; the guard still applies to each
+# How often auto-run wakes. Short on purpose: it only *checks*; the pacer decides
+# whether a message actually goes, so this sets the precision of the human gaps.
+AUTO_EVERY = 60
 
 
 class Control:
@@ -48,13 +50,24 @@ class Control:
                 qr = None
         return {"running": True, **st, "qr": qr}
 
+    def pacing_state(self) -> dict:
+        now = self.ctx.now()
+        pacer = self.swarm.pacer
+        plan = pacer.plan(now)
+        ready, why = pacer.ready(now)
+        return {"enabled": self.ctx.cfg.human_pacing, "plan": plan.__dict__, "ready": ready,
+                "why": why, "next_at": pacer.next_at(), "now": now}
+
     def state(self) -> dict:
+        llm = self.ctx.llm
         return {
             "relay": self.relay_state(),
             "stages": self.ctx.store.stage_counts(),
             "activity": self.ctx.store.activity(),
+            "queue": self.ctx.store.queue_view(),
+            "pacing": self.pacing_state(),
+            "writer": llm.name if llm else "",
             "auto": self.auto,
-            "every": self.every,
             "last_run": self.last_run,
             "cap": self.ctx.cfg.daily_cap,
         }
@@ -181,20 +194,23 @@ table{width:100%;border-collapse:collapse}td{padding:4px 0;border-bottom:1px sol
   <section class="card"><h2>WhatsApp</h2><div id="relay" class="mute">Checking…</div></section>
   <section class="card"><h2>Run</h2>
     <div class="row"><button class="primary" id="run">Run now</button>
-    <label class="row"><input type="checkbox" id="auto"> Auto-run every <span id="every"></span> min</label></div>
-    <p class="mute" id="rules"></p><div id="last" class="mute"></div></section>
+    <label class="row"><input type="checkbox" id="auto"> Auto-run</label></div>
+    <p id="pace"></p><p class="mute" id="writer"></p><div id="last" class="mute"></div></section>
   <section class="card"><h2>Pipeline</h2><table id="stages"></table></section>
   <section class="card"><h2>Add leads</h2>
-    <p class="mute">Paste CSV with a header row: <code>name,phone,company</code>. Malaysian numbers can be local (012-345 6789).</p>
-    <textarea id="csv" placeholder="name,phone,company&#10;Aisha,012-3456789,Kedai Aisha"></textarea>
+    <p class="mute">Paste CSV with a header row: <code>name,phone,company</code>, plus any columns you know &mdash; <code>industry</code>, <code>area</code>, <code>notes</code> (private, for the AI), <code>hook</code> (a line to open with), <code>language</code> (en / ms / zh). The more you give, the more personal each message.</p>
+    <textarea id="csv" placeholder="name,phone,company,industry,area,notes&#10;Aisha,012-3456789,Kedai Aisha,bakery,Bayan Lepas,4.8 stars on Google but no website"></textarea>
     <div class="row"><button id="import">Import</button><span id="imported" class="mute"></span></div></section>
 </div>
+<section class="card" style="margin-top:14px"><h2>Next to send</h2><div class="feed" id="queue"></div></section>
 <section class="card" style="margin-top:14px"><h2>Activity</h2><div class="feed" id="feed"></div></section>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const when = (t) => new Date(t * 1000).toLocaleString();
+const hm = (t) => new Date(t * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+const WHY = {day_off:"Day off today (Sunday) — nothing sends.", before_start:"Not started yet today.", lunch:"Lunch break.", after_end:"Done for today.", quota_reached:"Today's quota is reached.", waiting:"Pausing between messages."};
 const ORDER = ["new","contacted","followup_1","followup_2","replied","won","lost","do_not_contact"];
 const LABEL = {new:"New",contacted:"Contacted",followup_1:"Follow-up 1 sent",followup_2:"Follow-up 2 sent",replied:"Replied — your turn",won:"Won",lost:"Lost",do_not_contact:"Do not contact"};
 let busy = false;
@@ -220,15 +236,29 @@ function lastHtml(l) {
   return "Last run " + esc(when(l.at)) + ": " + l.reports.map((r) => esc(r.agent) + " " + esc(r.done) + (Object.keys(r.skipped).length ? " (" + esc(Object.entries(r.skipped).map((e) => e[0] + " " + e[1]).join(", ")) + ")" : "")).join(" · ");
 }
 
+function paceHtml(p) {
+  if (!p.enabled) return '<span class="warn">Human pacing is off.</span>';
+  const d = p.plan;
+  if (!d.working) return '<span class="mute">' + WHY.day_off + '</span>';
+  let h = "Today: " + hm(d.start) + "–" + hm(d.end) + ", lunch " + hm(d.lunch_start) + "–" + hm(d.lunch_end) + ", up to " + d.quota + " messages.";
+  if (p.ready) h += ' <span class="ok">Ready to send the next one.</span>';
+  else if (p.why === "waiting" && p.next_at) h += ' <span class="mute">Next message around ' + hm(p.next_at) + ".</span>";
+  else h += ' <span class="mute">' + esc(WHY[p.why] || p.why) + "</span>";
+  return h;
+}
+
 function render(s) {
   $("relay").innerHTML = relayHtml(s.relay);
   $("auto").checked = s.auto;
-  $("every").textContent = Math.round(s.every / 60);
-  $("rules").textContent = "Sends only 09:00–21:00 Malaysia time, at most " + s.cap + " a day. A reply or STOP pauses the lead.";
+  $("pace").innerHTML = paceHtml(s.pacing);
+  $("writer").textContent = (s.writer ? "Messages written by " + s.writer + ", one per lead." : "Messages from templates. Add ANTHROPIC_API_KEY to .env for AI-written ones.") + " A reply or STOP pauses the lead.";
+  $("queue").innerHTML = s.queue.length ? s.queue.map((q) =>
+    '<div class="msg"><span>' + esc(q.name) + (q.company ? " · " + esc(q.company) : "") + '</span> <span class="mute">' + esc(q.kind.replace("_", " ")) + " · " + (q.source === "ai" ? "AI" : "template") + "</span><p>" + esc(q.text) + "</p></div>"
+  ).join("") : '<p class="mute">Nothing waiting. Add leads, then Run.</p>';
   $("last").innerHTML = lastHtml(s.last_run);
   $("stages").innerHTML = ORDER.map((k) => "<tr><td>" + LABEL[k] + "</td><td>" + (s.stages[k] || 0) + "</td></tr>").join("");
   $("feed").innerHTML = s.activity.length ? s.activity.map((a) =>
-    '<div class="msg"><span class="' + (a.dir === "in" ? "ok" : "mute") + '">' + (a.dir === "in" ? "← " : "→ ") + esc(a.name) + " " + esc(a.phone) + "</span> <span class=\"mute\">" + esc(when(a.at)) + (a.intent ? " · " + esc(a.intent) : "") + "</span><p>" + esc(a.text) + "</p></div>"
+    '<div class="msg"><span class="' + (a.dir === "in" ? "ok" : "mute") + '">' + (a.dir === "in" ? "← " : "→ ") + esc(a.name) + " " + esc(a.phone) + "</span> <span class=\"mute\">" + esc(when(a.at)) + (a.intent ? " · " + esc(a.intent) : "") + (a.source ? " · " + (a.source === "ai" ? "AI" : "template") : "") + "</span><p>" + esc(a.text) + "</p></div>"
   ).join("") : '<p class="mute">Nothing sent or received yet.</p>';
 }
 

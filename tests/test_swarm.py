@@ -6,7 +6,6 @@ import pytest
 from atlas.agents import Ctx
 from atlas.agents.intake import Intake
 from atlas.config import Config
-from atlas.llm import TemplateLLM
 from atlas.models import Inbound, Stage
 from atlas.phone import to_e164
 from atlas.store import Store
@@ -22,7 +21,7 @@ class FakeChannel:
         self.sent = []
         self.fail = False
 
-    def send(self, phone, text):
+    def send(self, phone, text, typing_ms=0):
         if self.fail:
             raise ConnectionError("relay down")
         self.sent.append((phone, text))
@@ -39,8 +38,9 @@ class Clock:
 @pytest.fixture
 def env():
     store, ch, clock = Store(), FakeChannel(), Clock()
-    cfg = Config(daily_cap=2)
-    return store, ch, clock, Swarm(store, ch, cfg, TemplateLLM(), clock)
+    # Pacing off: these tests are about the guard and the pipeline, not the clock.
+    cfg = Config(daily_cap=2, human_pacing=False)
+    return store, ch, clock, Swarm(store, ch, cfg, None, clock)
 
 
 def test_phone_national_gets_country_code_and_international_is_untouched():
@@ -67,7 +67,7 @@ def test_followups_wait_for_their_gap_then_stop_after_two(env):
     clock.t += 1 * DAY
     swarm.tick()
     assert len(ch.sent) == 1                    # too early
-    clock.t += 1 * DAY
+    clock.t += 2 * DAY                          # 2 days + up to 1 day of per-lead jitter
     swarm.tick()
     assert store.lead(lid).stage is Stage.FOLLOWUP_1
     clock.t += 6 * DAY
@@ -139,5 +139,5 @@ def test_a_crashing_agent_does_not_stop_the_others(env):
 def test_intake_skips_bad_and_duplicate_numbers(tmp_path):
     f = tmp_path / "l.csv"
     f.write_text("name,phone,company\nA,012-3456789,X\nA again,0123456789,X\nB,nope,Y\n")
-    r = Intake().run(Ctx(Store(), Config(), TemplateLLM(), time.time), str(f))
+    r = Intake().run(Ctx(Store(), Config(), None, time.time), str(f))
     assert r.done == 1 and r.skipped == {"duplicate": 1, "bad_phone": 1}
