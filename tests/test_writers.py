@@ -66,7 +66,7 @@ def test_writer_choice(ollama, tmp_path, monkeypatch):
     o = {"ollama_url": ollama.url, "ollama_model": "qwen3:8b"}
     assert make_writer({"writer": "templates", **o}, env) is None
     assert make_writer({"writer": "auto", **o}, env).name == "Ollama (qwen3:8b)"      # no key: Ollama
-    assert make_writer({"writer": "auto", **o, "ollama_model": "gone:7b"}, env) is None  # not installed
+    assert make_writer({"writer": "auto", **o, "ollama_model": "gone:7b"}, env).model == "llama3.1:8b"  # falls back
     assert make_writer({"writer": "claude", **o}, env) is None                         # asked, no key
     env.write_text("ANTHROPIC_API_KEY=sk-test\n")
     assert make_writer({"writer": "auto", **o}, env).name.startswith("Claude")        # key wins in auto
@@ -81,3 +81,17 @@ def test_each_claude_model_gets_only_the_parameters_it_accepts(model, effort, fa
     assert kw["model"] == model
     assert ("output_config" in kw) is effort
     assert ("fallbacks" in kw) is fallbacks and ("betas" in kw) is fallbacks
+
+
+def test_automatic_uses_an_installed_ollama_model_when_none_was_chosen(ollama, tmp_path, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    ollama.models = ["nomic-embed-text:latest", "llama3.1:latest"]
+    env = tmp_path / ".env"
+    w = make_writer({"writer": "auto", "ollama_url": ollama.url}, env)
+    assert w.name == "Ollama (llama3.1:latest)"                    # never the embedding model
+    w = make_writer({"writer": "ollama", "ollama_url": ollama.url}, env)
+    assert w.model == "llama3.1:latest"
+    w = make_writer({"writer": "auto", "ollama_url": ollama.url, "ollama_model": "removed:7b"}, env)
+    assert w.model == "llama3.1:latest"                            # chosen one gone: still writes
+    ollama.models = ["nomic-embed-text:latest"]
+    assert make_writer({"writer": "auto", "ollama_url": ollama.url}, env) is None

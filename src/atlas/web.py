@@ -400,10 +400,15 @@ function lastHtml(l) {
 }
 
 function writerHtml(w) {
-  let h = w.active ? '<span class="ok">Writing with ' + esc(w.active) + ".</span>" : '<span class="warn">Writing from templates.</span>';
-  if ((w.mode === "claude" || w.mode === "auto") && !w.claude_key) h += " Claude needs ANTHROPIC_API_KEY in the .env file.";
-  if ((w.mode === "claude" || w.mode === "auto") && w.claude_key && !w.claude_sdk) h += " The Claude library is missing; run Atlas.bat again.";
-  if ((w.mode === "ollama" || w.mode === "auto") && !w.ollama_models.length) h += " Ollama is not running, or has no models. Install it from ollama.com, then run: ollama pull llama3.1";
+  // Only say what is wrong when nothing is writing. A Claude hint while Ollama is
+  // happily writing reads as "you still need a key", which is not true.
+  if (w.active) return '<span class="ok">Writing with ' + esc(w.active) + ".</span>";
+  let h = '<span class="warn">Writing from templates.</span>';
+  if (w.mode === "templates") return h;
+  if (w.mode === "claude" && !w.claude_key) h += " Claude needs ANTHROPIC_API_KEY in the .env file, or choose Ollama above.";
+  if (w.mode === "claude" && w.claude_key && !w.claude_sdk) h += " The Claude library is missing; run Setup.bat again.";
+  if (w.mode === "ollama" && !w.ollama_models.length) h += " Ollama is not running, or has no models. Install it from ollama.com, then run: ollama pull llama3.1";
+  if (w.mode === "auto") h += " No AI writer found: install Ollama (free) or add a Claude key.";
   return h;
 }
 

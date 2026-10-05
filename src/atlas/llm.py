@@ -159,6 +159,13 @@ def make_writer(settings: dict, env_file: str | Path = ".env"):
     if mode in ("auto", "ollama"):
         url = settings.get("ollama_url") or "http://127.0.0.1:11434"
         model = settings.get("ollama_model") or ""
-        if model and (mode == "ollama" or model in OllamaLLM.list_models(url)):
+        installed = OllamaLLM.list_models(url)
+        # Nobody chose a model, or the chosen one is gone: use one that is actually
+        # installed rather than silently falling back to templates. Embedding models
+        # cannot write, so they are never the pick.
+        writers = [m for m in installed if "embed" not in m.lower()]
+        if (not model or model not in installed) and writers and not (mode == "ollama" and model):
+            model = writers[0]
+        if model and (mode == "ollama" or model in installed):
             return OllamaLLM(model, url)
     return None

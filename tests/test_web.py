@@ -202,7 +202,10 @@ SCRIPT
   await refresh();
   console.log(JSON.stringify({phones: el("phones").innerHTML, stages: el("stages").innerHTML, feed: el("feed").innerHTML,
     last: el("last").innerHTML, queue: el("queue").innerHTML, replied: el("replied").innerHTML,
-    writer: el("w-status").innerHTML, lists: el("lists").innerHTML, imp: el("imp-phone").innerHTML}));
+    writer: el("w-status").innerHTML, lists: el("lists").innerHTML, imp: el("imp-phone").innerHTML,
+    w_ollama_active: writerHtml({...writer, active:"Ollama (llama3.1:latest)"}),
+    w_claude_nokey: writerHtml({...writer, mode:"claude"}),
+    w_ollama_none: writerHtml({...writer, mode:"ollama"})}));
 })();
 """.replace("SCRIPT", _script())
     f = tmp_path / "h.js"
@@ -221,6 +224,9 @@ SCRIPT
     assert "quiet_hours 2" in o["last"] and "writer" not in o["last"]               # idle agents left out
     assert "is this still you?" in o["queue"] and "&lt;Aisha&gt;" in o["queue"]
     assert "Sounds good &lt;3" in o["replied"] and 'data-mark="won"' in o["replied"]
-    assert "templates" in o["writer"] and "ANTHROPIC_API_KEY" in o["writer"] and "ollama pull" in o["writer"]
+    assert "templates" in o["writer"] and "install Ollama" in o["writer"]
+    # Ollama writing in Automatic mode: not a word about Claude keys
+    assert "Writing with Ollama" in o["w_ollama_active"] and "ANTHROPIC" not in o["w_ollama_active"]
+    assert "ANTHROPIC_API_KEY" in o["w_claude_nokey"] and "ollama pull" in o["w_ollama_none"]
     assert "Phone 2: Rotary" in o["lists"]
     assert o["imp"].count("<option") == 3
