@@ -42,15 +42,23 @@ At 20-25 a day per phone, a list of 1,000 takes about 6-8 weeks.
 
 ## Start it (Windows)
 
-1. Install **Node.js LTS** (nodejs.org) and **Python 3.11+** (python.org, tick "Add to PATH").
-2. Double-click **`Atlas.bat`**. It starts one relay per phone and opens http://127.0.0.1:8790.
-3. Link each phone: WhatsApp -> Settings -> Linked devices -> Link a device, scan that phone's QR.
+1. Unzip Atlas to a folder such as `C:\Atlas`.
+2. Double-click **`Setup.bat`** once. It installs Node.js and Python (through Windows' own
+   installer), the WhatsApp relay and the AI library, asks for your Claude key (or skip),
+   offers Ollama, keeps the PC awake while plugged in, adds a **COAI Atlas** desktop shortcut,
+   and starts Atlas. Safe to run again.
+3. On the page that opens, scan each phone's QR: WhatsApp -> Settings -> Linked devices ->
+   Link a device. Rename each phone.
 4. Add contacts per phone: a Google Contacts CSV, a `.vcf` exported from the phone, your own
    spreadsheet, or **Import this phone's WhatsApp chats** (available a few minutes after linking).
-5. Choose the writer, read **Next to send**, then **Run now** or tick **Auto-run**.
+5. Read **Next to send**, then **Run now** or tick **Auto-run**.
 
-Keep the three minimised "Atlas relay" windows open. Logs: `relay-log-1.txt` ... `-3.txt`.
-Auto-run is off every time Atlas starts, on purpose.
+After that, start it from the **COAI Atlas** desktop shortcut (or it starts with Windows, if
+you chose that). Keep the three minimised "Atlas relay" windows open. Logs: `relay-log-1.txt`
+... `-3.txt`. Auto-run is off every time Atlas starts, on purpose.
+
+**Updating:** copy a new version over the folder. Never delete `atlas.db`, `.env` or
+`whatsapp-relay\.whatsapp-session*` -- your contacts, key and phone links.
 
 ## Who writes the messages
 
@@ -84,5 +92,6 @@ PYTHONPATH=src python -m atlas serve        # or: import <file> --phone 2 --list
   are first tested on your PC. The Baileys calls were read from the installed library (6.7.24),
   not exercised.
 - No real Claude or Ollama call has been made from here; both are tested against stand-ins.
-- `Atlas.bat` has never been run on Windows.
+- `Setup.bat`, `setup.ps1` and `Atlas.bat` have never been run on Windows. `setup.ps1` was
+  parsed and its Python detection exercised under PowerShell 7 on Linux, not 5.1 on Windows.
 - Replies from contacts WhatsApp identifies only by an `@lid` id (no number) are skipped.

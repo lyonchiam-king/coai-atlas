@@ -3,8 +3,8 @@ REM COAI Atlas launcher. Starts the WhatsApp relay in its own window, then the c
 REM Logic lives in Python; this file only checks, installs and starts things.
 cd /d "%~dp0"
 
-where node >nul 2>nul || (echo Node.js is not installed. Install the LTS version from https://nodejs.org then run this again. & pause & exit /b 1)
-where python >nul 2>nul || (echo Python is not installed. Install Python 3.11+ from https://python.org and tick "Add to PATH". & pause & exit /b 1)
+where node >nul 2>nul || (echo Node.js is not installed. Double-click Setup.bat first. & pause & exit /b 1)
+python --version >nul 2>nul || (echo Python is not installed. Double-click Setup.bat first. & pause & exit /b 1)
 
 REM Atlas itself is plain Python: pointing Python at src\ is the whole setup.
 set "PYTHONPATH=%~dp0src"
