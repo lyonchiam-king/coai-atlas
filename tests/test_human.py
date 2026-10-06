@@ -34,8 +34,8 @@ class RecordingChannel(FakeChannel):
         super().__init__()
         self.clock, self.log = clock, []
 
-    def send(self, phone, text, typing_ms=0):
-        super().send(phone, text, typing_ms)
+    def send(self, phone, text, typing_ms=0, media=""):
+        super().send(phone, text, typing_ms, media)
         self.log.append((self.clock.t, typing_ms))
 
 

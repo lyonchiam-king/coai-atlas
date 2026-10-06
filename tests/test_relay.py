@@ -177,3 +177,16 @@ def test_relay_profile_and_contacts_routes_are_wired():
     for needle in ('app.get("/contacts"', 'app.post("/profile"', "sock.fetchStatus(jid)",
                    "sock.getBusinessProfile(jid)", '"messaging-history.set"', "contacts.addChats(chats)"):
         assert needle in raw, needle
+
+
+def test_relay_attaches_media_only_from_its_folder_and_never_loses_the_text():
+    raw = (RELAY / "server.js").read_text()
+    assert "resolveMedia(media, MEDIA_DIR)" in raw
+    assert '{ video: { url: file.path }, caption: message, mimetype: "video/mp4" }' in raw
+    assert "sent the text only" in raw                              # missing file: text still goes
+
+
+def test_videos_get_a_longer_timeout(relay):
+    ch = RelayChannel(relay.url)
+    ch.send("+60123456789", "hi", media="intro.mp4")
+    assert relay.sends[-1]["media"] == "intro.mp4"

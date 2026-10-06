@@ -27,9 +27,10 @@ class Swarm:
 
     def __init__(self, store: Store, channel: Channel | None = None, cfg: Config | None = None,
                  llm: LLM | None = None, now=time.time, inbox=None, rng: random.Random | None = None,
-                 channels: dict[str, Channel] | None = None):
+                 channels: dict[str, Channel] | None = None, media=None):
         # llm=None means templates. The CLI decides whether a real writer exists.
         self.ctx = Ctx(store, cfg or Config(), llm, now, rng or random.Random())
+        self.ctx.media = media
         if channels is None:
             channels = {"1": channel} if channel is not None else {}
             inboxes = {"1": inbox} if inbox is not None else {}

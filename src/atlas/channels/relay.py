@@ -23,11 +23,11 @@ class RelayChannel:
         # and an 8s ack, so the timeout covers all three, not just the transfer.
         self.url, self.timeout = url.rstrip("/"), timeout
 
-    def _call(self, path: str, body: dict | None = None) -> dict:
+    def _call(self, path: str, body: dict | None = None, timeout: float | None = None) -> dict:
         data = None if body is None else json.dumps(body).encode()
         req = urllib.request.Request(f"{self.url}{path}", data, {"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                 return json.loads(r.read() or b"{}")
         except urllib.error.HTTPError as e:
             # The relay explains itself in JSON; "HTTPError" alone tells the owner nothing.
@@ -39,12 +39,17 @@ class RelayChannel:
         except urllib.error.URLError as e:
             raise RelayError("WhatsApp relay is not running", stop_batch=True) from None
 
-    def send(self, phone: str, text: str, typing_ms: int = 0) -> None:
-        reply = self._call("/send", {"phone": phone, "message": text, "typing_ms": int(typing_ms)})
+    def send(self, phone: str, text: str, typing_ms: int = 0, media: str = "") -> None:
+        body = {"phone": phone, "message": text, "typing_ms": int(typing_ms)}
+        if media:
+            body["media"] = media
+        # A video is uploaded to WhatsApp before it is sent; on a slow line that takes minutes.
+        reply = self._call("/send", body, timeout=300 if media else None)
         # The relay answers 200 with status "failed" for errors inside sendMessage.
         # "unconfirmed" means the message left but WhatsApp has not acked yet: sent.
         if reply.get("status") not in ("sent", "unconfirmed"):
             raise RelayError(reply.get("error") or f"relay replied {reply!r}")
+        self.last_warning = reply.get("warning") or ""
 
     def status(self) -> dict:
         return self._call("/status")

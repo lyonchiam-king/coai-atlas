@@ -9,6 +9,8 @@ from .agents.intake import Intake
 from .channels.relay import RelayChannel
 from .config import Config
 from .llm import make_writer
+from .media import Library
+from .settings import apply_profile
 from .store import Store
 from .swarm import Swarm
 
@@ -28,6 +30,7 @@ def main(argv=None) -> None:
     a = p.parse_args(argv)
     store = Store(a.db)
     cfg = Config()
+    apply_profile(cfg, store)          # name, offer and opt-out line as set on the page
     if a.cmd == "import":
         r = Intake().run(Ctx(store, cfg, None, time.time), a.file, a.phone, a.list)
         print(f"imported {r.done}, skipped {r.skipped}")
@@ -36,7 +39,7 @@ def main(argv=None) -> None:
     channels = {acc: RelayChannel(url) for acc, _, url in cfg.accounts}
     # Which AI writes is a page setting; the key stays in .env and is never printed.
     llm = make_writer(json.loads(store.get("writer_settings") or "{}"))
-    swarm = Swarm(store, cfg=cfg, llm=llm, channels=channels)
+    swarm = Swarm(store, cfg=cfg, llm=llm, channels=channels, media=Library("media", store))
     if a.cmd == "tick":
         for r in swarm.tick():
             print(f"{r.agent}: done={r.done} skipped={r.skipped}")

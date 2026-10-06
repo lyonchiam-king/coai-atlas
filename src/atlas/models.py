@@ -54,7 +54,8 @@ class Draft:
     lead_id: int
     text: str
     kind: str             # opener | opener_nudge | pitch | first | followup_1 | followup_2
-    source: str = "template"   # "ai" or "template", shown on the page
+    source: str = "template"   # "ai", "template" (Atlas's) or "yours" / "yours+ai", shown on the page
+    media: str = ""            # file name in the media library, or "" for text only
 
 
 @dataclass

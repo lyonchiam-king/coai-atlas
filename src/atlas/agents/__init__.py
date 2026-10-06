@@ -18,3 +18,4 @@ class Ctx:
     rng: random.Random = field(default_factory=random.Random)
     # Phones whose relay checks numbers; their leads need wa == "yes" before a message.
     checked_accounts: set = field(default_factory=set)
+    media: object = None     # media.Library, or None when no video folder is set up

@@ -22,6 +22,7 @@ import re
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 
+from .. import templates
 from ..llm import LLMError
 from ..models import ACTIVE, Draft, Lead, Report, Stage
 from . import Ctx
@@ -221,7 +222,33 @@ class Writer:
             return "followup_2"
         return None
 
+    def _from_owner_template(self, tmpl: dict, lead: Lead, kind: str, ctx: Ctx) -> tuple[Draft, str]:
+        """The owner's own wording: spun, filled, optionally lightly personalised."""
+        c = ctx.cfg
+        base = templates.build(tmpl, lead, c, ctx.rng)
+        body, source, note = base, "yours", ""
+        if tmpl.get("ai") and ctx.llm is not None:
+            prompt = (f"What we know about them:\n{_facts_block(lead)}\n\n"
+                      f"The message to personalise:\n{base}")
+            try:
+                amended = ctx.llm.complete(templates.AMEND_SYSTEM.format(owner=c.owner_name), prompt)
+            except LLMError as e:
+                note = f"ai_failed: {e}"
+            else:
+                if templates.close_enough(base, amended):
+                    body, source = amended.strip().strip('"').strip(), "yours+ai"
+                else:
+                    note = "ai_edit_too_different"   # the owner's words go out instead
+        media = ctx.media.pick(lead.id, ctx.rng) if tmpl.get("media") and ctx.media is not None else ""
+        # The opt-out goes on selling messages unless the owner already wrote one.
+        if kind in SELLING and not re.search(r"(?<![\w-])stop(?![\w-])", body.lower()):
+            body = f"{body}\n\n{c.opt_out_line}"
+        return Draft(lead.id, body, kind, source, media), note
+
     def _draft(self, lead: Lead, kind: str, ctx: Ctx) -> tuple[Draft, str]:
+        tmpl = templates.load(ctx.store).get(kind)
+        if tmpl:
+            return self._from_owner_template(tmpl, lead, kind, ctx)
         c = ctx.cfg
         body, source, note = None, "template", ""
         if ctx.llm is not None:

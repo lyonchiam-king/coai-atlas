@@ -11,3 +11,4 @@ relay-log.txt
 .whatsapp-inbox*.json
 .whatsapp-contacts*.json
 relay-log-*.txt
+media/

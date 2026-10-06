@@ -60,21 +60,35 @@ you chose that). Keep the three minimised "Atlas relay" windows open. Logs: `rel
 **Updating:** copy a new version over the folder. Never delete `atlas.db`, `.env` or
 `whatsapp-relay\.whatsapp-session*` -- your contacts, key and phone links.
 
-## Who writes the messages
+## Settings (on the page)
 
-Set on the page:
+- **Who writes the messages:** Automatic, Claude, Ollama, or templates only.
+- **Claude:** paste the API key and press **Save key**. It is saved to `.env` on this PC and
+  never shown again. **Test** checks it for free. Choose Opus 5.5 (best), Sonnet 5.5 or Haiku 4.5.
+- **Ollama:** the address (normally `http://127.0.0.1:11434`) and the model. **Save & test**
+  lists what is installed.
+- **You:** your name as old contacts know you, the name for business messages, what COAI offers,
+  and the opt-out line. Blank puts the default back; the opt-out line can never be empty.
 
-- **Claude** -- best writing, especially in BM and Chinese. Copy `.env.example` to `.env` and
-  paste an Anthropic API key. Opus 5.5 (best), Sonnet 5.5 (cheaper) or Haiku 4.5 (cheapest).
-- **Ollama** -- free, runs on this PC (16GB+ RAM recommended). Install from ollama.com, then e.g.
-  `ollama pull llama3.1`. The page lists only models actually installed.
-- **Templates** -- always available; openers in English, BM and Chinese, the rest English.
+## Your messages and videos
 
-Every AI message is checked before it can queue (no links, no placeholders, no own opt-out line,
-no selling in the opener, sensible length); one that fails is replaced by a template.
+**Your messages** has one template per step: 1 "is this still you?", 2 nudge, 3 reply + introduce
+COAI, 4-5 follow-ups. Leave one empty and Atlas uses its own wording for that step.
 
-Useful columns in your lists: `how_we_know`, `notes` (private, for the AI only), `hook`
-(a line to open with), `language` (en / ms / zh), `company`, `industry`, `area`.
+- Placeholders: `{first_name}` `{name}` `{company}` `{how_we_know}` `{owner}` `{industry}` `{area}`,
+  or any column from your list.
+- Variations: `{Hi|Hello|Hey}` picks one at random.
+- Several versions: put a line with only `---` between them; each message picks one.
+- **AI personalises each one slightly:** Claude or Ollama makes small changes per person. If the
+  change is too big (lost a link, a date or a price, or most of your words), your own wording
+  is sent instead.
+- **Attach a random video or picture:** picks a ticked file from **Videos & pictures**, never
+  the same one twice for the same person. Best on step 3, not the first message.
+- **Preview** shows three versions before you save. **Rewrite queued messages** redoes messages
+  already waiting, after you change a template.
+
+**Videos & pictures:** upload MP4 videos (under 16 MB plays best on WhatsApp), JPG or PNG.
+Files are kept in the `media` folder. Untick a file to take it out of rotation.
 
 ## Developer
 

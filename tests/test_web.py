@@ -191,7 +191,10 @@ const base = {stages:{new:2,opener_sent:1}, lists:[{account:"2", list_name:"Rota
   activity:[{dir:"in",at:1,text:"<b>stop</b>",name:"A",phone:"+60",intent:"opt_out",source:"",account:"2"}],
   queue:[{id:1,kind:"opener",text:"Hi <Aisha>, is this still you?",source:"ai",name:"Aisha",company:"Kedai",phone:"+60",account:"1"}],
   replied:[{id:7,name:"Tan",phone:"+6016",account:"3",last_text:"Sounds good <3"}],
-  writer, auto:false, last_run:null, cap:25, tz:"Asia/Kuala_Lumpur"};
+  writer, auto:false, last_run:null, cap:25, tz:"Asia/Kuala_Lumpur",
+  profile:{owner_name:"Lyon", sender_name:"Lyon from COAI", offer:"AI tools", opt_out_line:"Reply STOP"},
+  templates:{pitch:{text:"Hi {first_name}! <b>", ai:true, media:true}},
+  media:[{name:"intro <1>.mp4", kind:"video", size:20971520, on:true, big:true}, {name:"flyer.png", kind:"image", size:1048576, on:false, big:false}]};
 const fixturePhones = [phone("1", {running:false}), phone("2", {running:true, connected:false, qr:"data:image/png;base64,QQ"}),
                 phone("3", {running:true, connected:true}, {plan:{...plan, working:false}, why:"day_off"})];
 states = [{...base, phones: fixturePhones}, {...base, phones: fixturePhones,
@@ -205,7 +208,10 @@ SCRIPT
     writer: el("w-status").innerHTML, lists: el("lists").innerHTML, imp: el("imp-phone").innerHTML,
     w_ollama_active: writerHtml({...writer, active:"Ollama (llama3.1:latest)"}),
     w_claude_nokey: writerHtml({...writer, mode:"claude"}),
-    w_ollama_none: writerHtml({...writer, mode:"ollama"})}));
+    w_ollama_none: writerHtml({...writer, mode:"ollama"}),
+    media: el("m-list").innerHTML, owner: el("p-owner_name").value, tstate: el("t-state").textContent,
+    pitch: (showTemplate("pitch"), [el("t-text").value, el("t-ai").checked, el("t-media").checked]),
+    key: el("k-out").innerHTML}));
 })();
 """.replace("SCRIPT", _script())
     f = tmp_path / "h.js"
@@ -213,6 +219,7 @@ SCRIPT
     r = subprocess.run(["node", str(f)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     o = json.loads(r.stdout)
+    assert "not running" not in o["last"], "render threw and fell into the catch"
     assert "Relay not running" in o["phones"]
     assert 'src="data:image/png;base64,QQ"' in o["phones"] and "Linked devices" in o["phones"]
     assert "Connected" in o["phones"] and "Day off" in o["phones"]
@@ -230,3 +237,9 @@ SCRIPT
     assert "ANTHROPIC_API_KEY" in o["w_claude_nokey"] and "ollama pull" in o["w_ollama_none"]
     assert "Phone 2: Rotary" in o["lists"]
     assert o["imp"].count("<option") == 3
+
+    assert "intro &lt;1&gt;.mp4" in o["media"] and "Over 16 MB" in o["media"] and "20.0 MB" in o["media"]
+    assert 'data-media-toggle="flyer.png">' in o["media"]                     # unticked one shows unticked
+    assert o["owner"] == "Lyon" and "own words" in o["tstate"]                # opener has no template
+    assert o["pitch"] == ["Hi {first_name}! <b>", True, True]
+    assert "No key saved" in o["key"] and "sk-" not in o["key"]

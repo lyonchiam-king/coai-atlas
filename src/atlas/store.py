@@ -34,6 +34,8 @@ MIGRATIONS = [
     ("leads", "list_name", "TEXT DEFAULT ''"),
     ("leads", "wa", "TEXT DEFAULT ''"),
     ("sends", "account", "TEXT DEFAULT '1'"),
+    ("drafts", "media", "TEXT DEFAULT ''"),
+    ("sends", "media", "TEXT DEFAULT ''"),
 ]
 
 # Replies to someone who just wrote back go before new outreach.
@@ -105,15 +107,15 @@ class Store:
             self._db.commit()
 
     def mark_sent(self, lead_id: int, stage: Stage, now: float | None = None, text: str = "",
-                  source: str = "") -> None:
+                  source: str = "", media: str = "") -> None:
         now = time.time() if now is None else now
         with self.lock:
             self._db.execute("UPDATE leads SET stage=?, last_contacted=? WHERE id=?",
                              (stage.value, now, lead_id))
             self._db.execute(
-                "INSERT INTO sends(lead_id, at, text, source, account) "
-                "VALUES(?,?,?,?,(SELECT account FROM leads WHERE id=?))",
-                (lead_id, now, text, source, lead_id))
+                "INSERT INTO sends(lead_id, at, text, source, media, account) "
+                "VALUES(?,?,?,?,?,(SELECT account FROM leads WHERE id=?))",
+                (lead_id, now, text, source, media, lead_id))
             self._db.commit()
 
     def sends_since(self, since: float, account: str | None = None) -> int:
@@ -141,10 +143,10 @@ class Store:
     def activity(self, limit: int = 30) -> list[dict]:
         """Recent sends and replies, newest first, for the control page."""
         q = """
-          SELECT 'out' AS dir, s.at, s.text, l.name, l.phone, '' AS intent, s.source, l.account FROM sends s
+          SELECT 'out' AS dir, s.at, s.text, l.name, l.phone, '' AS intent, s.source, l.account, s.media FROM sends s
             JOIN leads l ON l.id=s.lead_id
           UNION ALL
-          SELECT 'in', i.at, i.text, l.name, l.phone, i.intent, '', l.account FROM inbound i
+          SELECT 'in', i.at, i.text, l.name, l.phone, i.intent, '', l.account, '' FROM inbound i
             JOIN leads l ON l.id=i.lead_id
           ORDER BY at DESC LIMIT ?"""
         with self.lock:
@@ -152,8 +154,8 @@ class Store:
 
     def add_draft(self, d: Draft) -> None:
         with self.lock:
-            self._db.execute("INSERT INTO drafts(lead_id,text,kind,source) VALUES(?,?,?,?)",
-                             (d.lead_id, d.text, d.kind, d.source))
+            self._db.execute("INSERT INTO drafts(lead_id,text,kind,source,media) VALUES(?,?,?,?,?)",
+                             (d.lead_id, d.text, d.kind, d.source, d.media))
             self._db.commit()
 
     def pending_drafts(self, account: str | None = None) -> list[tuple[int, Draft]]:
@@ -164,14 +166,22 @@ class Store:
             args = (account,)
         with self.lock:
             rows = self._db.execute(q + f" ORDER BY {KIND_ORDER}", args).fetchall()
-        return [(r["id"], Draft(r["lead_id"], r["text"], r["kind"], r["source"])) for r in rows]
+        return [(r["id"], Draft(r["lead_id"], r["text"], r["kind"], r["source"], r["media"] or "")) for r in rows]
 
     def queue_view(self, limit: int = 20) -> list[dict]:
         """Drafts waiting to go, with who they are for -- what the owner reviews."""
-        q = f"""SELECT d.id, d.kind, d.text, d.source, l.name, l.company, l.phone, l.account, l.list_name
+        q = f"""SELECT d.id, d.kind, d.text, d.source, d.media, l.name, l.company, l.phone, l.account, l.list_name
                FROM drafts d JOIN leads l ON l.id=d.lead_id WHERE d.sent=0 ORDER BY {KIND_ORDER} LIMIT ?"""
         with self.lock:
             return [dict(r) for r in self._db.execute(q, (limit,)).fetchall()]
+
+    def media_used_for(self, lead_id: int) -> list[str]:
+        """Files this person has been sent or has queued, so the next pick can differ."""
+        with self.lock:
+            rows = self._db.execute(
+                "SELECT media FROM sends WHERE lead_id=? AND media!='' UNION "
+                "SELECT media FROM drafts WHERE lead_id=? AND media!='' AND sent=0", (lead_id, lead_id)).fetchall()
+        return [r[0] for r in rows]
 
     def last_sent_text(self, lead_id: int) -> str:
         with self.lock:
@@ -209,6 +219,12 @@ class Store:
         with self.lock:
             self._db.execute("UPDATE drafts SET sent=1 WHERE id=?", (draft_id,))
             self._db.commit()
+
+    def clear_pending_drafts(self) -> int:
+        with self.lock:
+            n = self._db.execute("DELETE FROM drafts WHERE sent=0").rowcount
+            self._db.commit()
+        return n
 
     def drop_drafts(self, lead_id: int) -> None:
         with self.lock:

@@ -11,6 +11,7 @@
 
 const express = require("express");
 const fs = require("fs");
+const path = require("path");
 const {
   makeWASocket,
   useMultiFileAuthState,
@@ -20,6 +21,7 @@ const {
 const QRCode = require("qrcode");
 const { extractInbound, Inbox } = require("./inbox");
 const { ContactBook } = require("./contacts");
+const { resolveMedia } = require("./media");
 const pino = require("pino");
 
 // ---------------------------------------------------------------------------
@@ -37,6 +39,10 @@ const CHECK_INTERVAL_MS =
   parseInt(process.env.CHECK_INTERVAL_SECONDS || "3", 10) * 1000;
 const CHECK_MAX_PER_REQUEST = parseInt(process.env.CHECK_MAX_PER_REQUEST || "50", 10);
 const TYPING_MAX_MS = 20000;
+// Videos and pictures Atlas may attach. Only bare file names from this folder
+// are accepted: a path from the request is never followed, so nothing else on
+// the PC can be sent.
+const MEDIA_DIR = path.resolve(process.env.MEDIA_DIR || path.join(__dirname, "..", "media"));
 const ACK_TIMEOUT_MS = parseInt(process.env.ACK_TIMEOUT_SECONDS || "8", 10) * 1000;
 
 // ---------------------------------------------------------------------------
@@ -484,7 +490,7 @@ app.post("/send", async (req, res) => {
   // `image` is optional base64 PNG/JPEG bytes. With one, the message goes
   // as a picture with the text as its caption -- a screenshot of the site
   // says more in a phone notification than a link nobody taps.
-  const { phone, message, image, typing_ms } = req.body || {};
+  const { phone, message, image, typing_ms, media } = req.body || {};
 
   if (!phone || !message) {
     return res.status(400).json({
@@ -574,7 +580,18 @@ app.post("/send", async (req, res) => {
       }
 
       let payload = { text: message };
-      if (image) {
+      let warning;
+      if (media) {
+        const file = resolveMedia(media, MEDIA_DIR);
+        if (file) {
+          payload = file.kind === "video"
+            ? { video: { url: file.path }, caption: message, mimetype: "video/mp4" }
+            : { image: { url: file.path }, caption: message };
+        } else {
+          // The text is worth more than the attachment: send it alone and say so.
+          warning = `Attachment "${String(media).slice(0, 80)}" was not found in the media folder; sent the text only.`;
+        }
+      } else if (image) {
         try {
           const buffer = Buffer.from(image, "base64");
           if (!buffer.length) throw new Error("empty image");
@@ -614,7 +631,8 @@ app.post("/send", async (req, res) => {
         warning: unregistered
           ? `WhatsApp did not recognise ${digits} just now, though it was `
             + "confirmed earlier. The message was still sent."
-          : undefined,
+          : warning,
+        media: media || undefined,
         note:
           ack === null
             ? "WhatsApp has not confirmed delivery yet. The message was "

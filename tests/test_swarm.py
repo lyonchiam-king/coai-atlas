@@ -21,10 +21,11 @@ class FakeChannel:
         self.sent = []
         self.fail = False
 
-    def send(self, phone, text, typing_ms=0):
+    def send(self, phone, text, typing_ms=0, media=""):
         if self.fail:
             raise ConnectionError("relay down")
         self.sent.append((phone, text))
+        self.media = getattr(self, "media", []) + [media]
 
 
 class Clock:

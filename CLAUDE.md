@@ -29,3 +29,9 @@ Python 3.11+, stdlib only except the optional `anthropic` SDK (imported lazily),
 - Writers: `make_writer` picks Claude / Ollama / templates from the page setting. Never hard-code
   an Ollama model name; offer what `/api/tags` lists. Each Claude model gets only the params it accepts.
 - Page times use `cfg.tz_name`, never the browser's zone.
+- The Claude key is write-only: `settings.save_claude_key` writes `.env`; the page only ever learns
+  `claude_key: true/false`. Profile fields live in kv `profile`; a blank opt-out line means default.
+- Owner templates (`templates.py`): spin, fill, then optional AI light-edit gated by `close_enough`
+  (links, numbers, length, word overlap). A failed gate sends the owner's words, never the AI's.
+- Media: the relay takes bare file names only and resolves them inside MEDIA_DIR (`media.js`);
+  a missing file sends the text alone with a warning. Never pass paths over HTTP.

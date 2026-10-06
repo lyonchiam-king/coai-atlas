@@ -45,13 +45,16 @@ class Sender:
                 break                 # quiet hours or cap: nothing else can go either
             typing = pacer.typing_ms(d.text) if ctx.cfg.human_pacing else 0
             try:
-                self.channel.send(lead.phone, d.text, typing_ms=typing)
+                if d.media:
+                    self.channel.send(lead.phone, d.text, typing_ms=typing, media=d.media)
+                else:
+                    self.channel.send(lead.phone, d.text, typing_ms=typing)
             except Exception as e:   # one bad send must not stop the queue
                 rep.skip(f"send_failed: {e}" if isinstance(e, RelayError) else f"send_failed:{type(e).__name__}")
                 if getattr(e, "stop_batch", False):
                     break
                 continue
-            ctx.store.mark_sent(lead.id, NEXT[d.kind], now, d.text, d.source)
+            ctx.store.mark_sent(lead.id, NEXT[d.kind], now, d.text, d.source, d.media)
             ctx.store.close_draft(draft_id)
             rep.done += 1
             if ctx.cfg.human_pacing:

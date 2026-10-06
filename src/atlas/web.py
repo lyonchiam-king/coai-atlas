@@ -14,11 +14,17 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import random
+import urllib.parse
+
+from . import settings as owner_settings
+from . import templates
 from .agents import Ctx
 from .agents.intake import Intake
 from .importers import from_whatsapp
-from .llm import CLAUDE_MODELS, OllamaLLM, make_writer, read_env_file
-from .models import Report, Stage
+from .llm import CLAUDE_MODELS, OllamaLLM, make_writer
+from .media import MAX_BYTES, Library
+from .models import Lead, Report, Stage
 from .swarm import Swarm
 
 # How often auto-run wakes. Short on purpose: it only *checks*; the pacer decides
@@ -30,8 +36,12 @@ OLLAMA_URL = "http://127.0.0.1:11434"
 class Control:
     """Everything the page can do, kept apart from HTTP so it can be tested directly."""
 
-    def __init__(self, swarm: Swarm, env_file: str | Path = ".env", every: float = AUTO_EVERY):
+    def __init__(self, swarm: Swarm, env_file: str | Path = ".env", every: float = AUTO_EVERY,
+                 media_dir: str | Path = "media"):
         self.swarm, self.env_file, self.every = swarm, Path(env_file), every
+        if swarm.ctx.media is None:
+            swarm.ctx.media = Library(media_dir, swarm.ctx.store)
+        self.media: Library = swarm.ctx.media
         self.auto = False          # off on every start: sending is never a surprise
         self.last_run: dict | None = None
         self._run_lock = threading.Lock()
@@ -91,11 +101,14 @@ class Control:
         except ValueError:
             return {}
 
+    def ollama_url(self) -> str:
+        return self.settings().get("ollama_url") or OLLAMA_URL
+
     def ollama_models(self, refresh: bool = False) -> list[str]:
         # The page refreshes every few seconds; asking Ollama each time would be rude.
         at, models = self._ollama_cache
         if refresh or time.time() - at > 30:
-            models = OllamaLLM.list_models(self.settings().get("ollama_url") or OLLAMA_URL)
+            models = OllamaLLM.list_models(self.ollama_url())
             self._ollama_cache = (time.time(), models)
         return models
 
@@ -110,6 +123,11 @@ class Control:
             s["claude_model"] = body["claude_model"]
         if "ollama_model" in body:
             s["ollama_model"] = str(body["ollama_model"])[:100]
+        if "ollama_url" in body:
+            url = str(body["ollama_url"]).strip().rstrip("/")[:200]
+            if url and not url.startswith(("http://", "https://")):
+                url = "http://" + url
+            s["ollama_url"] = url
         self.ctx.store.put("writer_settings", json.dumps(s))
         self.ollama_models(refresh=True)
         self.apply_writer()
@@ -122,8 +140,7 @@ class Control:
             sdk = True
         except ImportError:
             sdk = False
-        import os
-        key = bool(os.environ.get("ANTHROPIC_API_KEY") or read_env_file(self.env_file).get("ANTHROPIC_API_KEY"))
+        key = owner_settings.has_claude_key(self.env_file)
         llm = self.ctx.llm
         return {
             "mode": s.get("writer", "auto"),
@@ -131,10 +148,64 @@ class Control:
             "claude_models": CLAUDE_MODELS,
             "ollama_model": s.get("ollama_model", ""),
             "ollama_models": self.ollama_models(),
+            "ollama_url": self.ollama_url(),
             "claude_key": key,          # presence only; the key itself never leaves .env
             "claude_sdk": sdk,
             "active": llm.name if llm else "",
         }
+
+    # ---- settings ----------------------------------------------------------
+
+    def save_key(self, key: str) -> dict:
+        r = owner_settings.save_claude_key(self.env_file, key)
+        if r.get("ok"):
+            self.apply_writer()
+            # Saved is saved; whether Anthropic accepts it is reported separately.
+            r["test"] = owner_settings.test_claude(self.env_file)
+            r["writer"] = self.writer_state()
+        return r
+
+    def remove_key(self) -> dict:
+        owner_settings.remove_claude_key(self.env_file)
+        self.apply_writer()
+        return {"ok": True, "writer": self.writer_state()}
+
+    def test_claude(self) -> dict:
+        return owner_settings.test_claude(self.env_file)
+
+    def test_ollama(self) -> dict:
+        models = self.ollama_models(refresh=True)
+        self.apply_writer()
+        if not models:
+            return {"ok": False, "message": f"No Ollama answering at {self.ollama_url()}, or no models installed."}
+        return {"ok": True, "message": f"Ollama is running with {len(models)} model(s).", "models": models}
+
+    def save_profile(self, body: dict) -> dict:
+        return owner_settings.save_profile(self.ctx.cfg, self.ctx.store, body)
+
+    # ---- your messages -----------------------------------------------------
+
+    def save_template(self, body: dict) -> dict:
+        return templates.save(self.ctx.store, str(body.get("kind", "")), str(body.get("text", "")),
+                              bool(body.get("ai")), bool(body.get("media")))
+
+    def preview_template(self, body: dict) -> dict:
+        """Three versions as three different people would get them, before anything is saved."""
+        text = str(body.get("text", "")).strip()
+        if not text:
+            return {"samples": []}
+        people = self.ctx.store.leads()[:3] or [
+            Lead(0, "Aisha Rahman", "+60123456789", company="Kedai Aisha",
+                 facts={"how_we_know": "Penang Rotary", "industry": "bakery", "area": "Bayan Lepas"})]
+        rng = random.Random()
+        tmpl = {"text": text}
+        return {"samples": [{"name": p.name, "text": templates.build(tmpl, p, self.ctx.cfg, rng)}
+                            for p in (people * 3)[:3]]}
+
+    def redo_queue(self) -> dict:
+        """Throw away queued (unsent) messages so they are written again with the new wording."""
+        n = self.ctx.store.clear_pending_drafts()
+        return {"ok": True, "cleared": n}
 
     # ---- page --------------------------------------------------------------
 
@@ -147,6 +218,9 @@ class Control:
             "queue": self.ctx.store.queue_view(),
             "replied": self.ctx.store.replied_view(),
             "writer": self.writer_state(),
+            "profile": owner_settings.profile_state(self.ctx.cfg),
+            "templates": templates.load(self.ctx.store),
+            "media": self.media.list(),
             "auto": self.auto,
             "last_run": self.last_run,
             "cap": self.ctx.cfg.daily_cap,
@@ -242,6 +316,12 @@ def make_handler(control: Control):
             if self.headers.get("X-Atlas") != "1":
                 return self._json(403, {"error": "missing X-Atlas header"})
             n = int(self.headers.get("Content-Length") or 0)
+            if self.path.startswith("/api/media-upload"):
+                # The file itself is the body, so a video never has to be squeezed into JSON.
+                if n > MAX_BYTES:
+                    return self._json(413, {"error": "That file is over 64 MB. Shorten or compress the video first."})
+                name = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("name", [""])[0]
+                return self._json(200, control.media.save(name, self.rfile.read(n)))
             try:
                 body = json.loads(self.rfile.read(n) or b"{}")
             except ValueError:
@@ -255,6 +335,16 @@ def make_handler(control: Control):
                 "/api/writer": lambda: control.set_writer(body),
                 "/api/rename": lambda: control.rename(a, str(body.get("name", ""))),
                 "/api/mark": lambda: control.mark(int(body.get("lead", 0)), str(body.get("outcome", ""))),
+                "/api/key": lambda: control.save_key(str(body.get("key", ""))),
+                "/api/key-remove": lambda: control.remove_key(),
+                "/api/test-claude": lambda: control.test_claude(),
+                "/api/test-ollama": lambda: control.test_ollama(),
+                "/api/profile": lambda: control.save_profile(body),
+                "/api/template": lambda: control.save_template(body),
+                "/api/template-preview": lambda: control.preview_template(body),
+                "/api/redo-queue": lambda: control.redo_queue(),
+                "/api/media-toggle": lambda: control.media.set_on(str(body.get("name", "")), bool(body.get("on"))),
+                "/api/media-delete": lambda: control.media.delete(str(body.get("name", ""))),
             }
             if self.path not in routes:
                 return self._json(404, {"error": "not found"})
@@ -298,11 +388,11 @@ main{max-width:1100px;margin:0 auto;padding:16px}h1{font-size:20px;margin:0}h2{f
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;min-width:0}
 .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-weight:600;font-size:13px;background:var(--bg)}
 .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.mute{color:var(--mute)}.small{font-size:13px}
-select,input[type=text]{max-width:100%}
-button,select,input[type=text]{font:inherit;padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+select,input[type=text],input[type=password]{max-width:100%}
+button,select,input[type=text],input[type=password]{font:inherit;padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
 button{cursor:pointer}button.primary{background:var(--accent);border-color:var(--accent);color:#fff}button.link{border:0;padding:0;background:none;color:var(--accent)}
 textarea{width:100%;min-height:90px;font:13px ui-monospace,monospace;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
-@media (max-width:600px){textarea,input[type=text],select{font-size:16px}}
+@media (max-width:600px){textarea,input[type=text],input[type=password],select{font-size:16px}}
 table{width:100%;border-collapse:collapse}td{padding:3px 0;border-bottom:1px solid var(--line)}td:last-child{text-align:right;font-weight:600}
 .feed{max-height:380px;overflow:auto}.msg{padding:8px 0;border-bottom:1px solid var(--line)}.msg p{margin:2px 0 0;white-space:pre-wrap;word-break:break-word}
 .qr img{width:100%;max-width:220px;background:#fff;padding:6px;border-radius:8px}
@@ -312,7 +402,7 @@ label.blk{display:block;margin-top:8px}
 <div class="top"><h1>COAI Atlas</h1><span class="grow"></span>
   <button class="primary" id="run">Run now</button>
   <label class="row" style="margin:0"><input type="checkbox" id="auto"> Auto-run</label></div>
-<p class="mute small" id="last"></p>
+<p class="mute small" id="last">Loading&hellip;</p>
 
 <div class="grid" id="phones"></div>
 
@@ -330,15 +420,53 @@ label.blk{display:block;margin-top:8px}
     <textarea id="imp-text" placeholder="name,phone,company,how_we_know&#10;Aisha,012-3456789,Kedai Aisha,Penang Rotary"></textarea>
     <div class="row"><button id="imp-go">Import</button><button id="imp-wa">Import this phone's WhatsApp chats</button></div>
     <p id="imp-out" class="small"></p></section>
-  <section class="card"><h2>Writer</h2>
+  <section class="card"><h2>Settings</h2>
     <label class="blk">Who writes the messages <select id="w-mode">
       <option value="auto">Automatic (Claude if a key is set, else Ollama)</option>
       <option value="claude">Claude</option><option value="ollama">Ollama (free, this PC)</option>
       <option value="templates">Templates only</option></select></label>
+    <p id="w-status" class="small"></p>
+    <h3 style="margin-top:14px">Claude</h3>
+    <label class="blk">API key <input type="password" id="k-key" placeholder="sk-ant-..." autocomplete="off"></label>
+    <div class="row"><button id="k-save">Save key</button><button id="k-test">Test</button><button class="link small" id="k-remove">Remove key</button></div>
+    <p id="k-out" class="small"></p>
     <label class="blk">Claude model <select id="w-claude"></select></label>
-    <label class="blk">Ollama model <select id="w-ollama"></select></label>
-    <p id="w-status" class="small"></p></section>
+    <h3 style="margin-top:14px">Ollama</h3>
+    <label class="blk">Address <input type="text" id="o-url" placeholder="http://127.0.0.1:11434"></label>
+    <label class="blk">Model <select id="w-ollama"></select></label>
+    <div class="row"><button id="o-test">Save &amp; test</button></div>
+    <p id="o-out" class="small"></p>
+    <h3 style="margin-top:14px">You</h3>
+    <label class="blk">Your name, as old contacts know you <input type="text" id="p-owner_name"></label>
+    <label class="blk">Name for business messages <input type="text" id="p-sender_name"></label>
+    <label class="blk">What COAI offers (one line) <textarea id="p-offer" style="min-height:56px"></textarea></label>
+    <label class="blk">Opt-out line <input type="text" id="p-opt_out_line"></label>
+    <div class="row"><button id="p-save">Save</button></div><p id="p-out" class="small"></p></section>
   <section class="card"><h2>All phones</h2><table id="stages"></table><div id="lists" class="small mute"></div></section>
+</div>
+
+<div class="grid">
+  <section class="card"><h2>Your messages</h2>
+    <label class="blk">Message <select id="t-kind">
+      <option value="opener">1. &ldquo;Is this still you?&rdquo; (no selling)</option>
+      <option value="opener_nudge">2. Nudge if no answer</option>
+      <option value="pitch">3. Reply after they confirm + introduce COAI</option>
+      <option value="followup_1">4. Follow-up 1</option>
+      <option value="followup_2">5. Last follow-up</option>
+      <option value="first">One-message mode (two-step off)</option></select></label>
+    <p id="t-state" class="small mute"></p>
+    <textarea id="t-text" style="min-height:170px" placeholder="{Hi|Hello} {first_name}, is this still your number? It's {owner} here. Long time!&#10;---&#10;{first_name}! {owner} here, from {how_we_know}. Still using this number?"></textarea>
+    <label class="row"><input type="checkbox" id="t-ai"> AI personalises each one slightly</label>
+    <label class="row"><input type="checkbox" id="t-media"> Attach a random video or picture</label>
+    <p id="t-warn" class="small warn"></p>
+    <div class="row"><button class="primary" id="t-save">Save</button><button id="t-preview">Preview</button><button id="t-redo">Rewrite queued messages</button></div>
+    <p id="t-out" class="small"></p><div id="t-samples"></div>
+    <p class="mute small">Placeholders: <code>{first_name}</code> <code>{name}</code> <code>{company}</code> <code>{how_we_know}</code> <code>{owner}</code> <code>{industry}</code> <code>{area}</code>, or any column from your list. <code>{Hi|Hello|Hey}</code> picks one at random. Several versions: a line with only <code>---</code> between them. Empty = Atlas's own wording.</p></section>
+  <section class="card"><h2>Videos &amp; pictures</h2>
+    <p class="mute small">MP4 videos (under 16 MB play best on WhatsApp), JPG or PNG pictures. A message with &ldquo;Attach a random video&rdquo; picks one that is ticked, and never the same one twice for the same person.</p>
+    <input type="file" id="m-file" accept=".mp4,.jpg,.jpeg,.png" multiple style="max-width:100%">
+    <div class="row"><button id="m-upload">Upload</button></div><p id="m-out" class="small"></p>
+    <div id="m-list"></div></section>
 </div>
 
 <section class="card"><h2>Activity</h2><div class="feed" id="feed"></div></section>
@@ -352,6 +480,9 @@ const when = (t) => new Date(t * 1000).toLocaleString([], {timeZone: TZ});
 const hm = (t) => new Date(t * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", timeZone: TZ});
 const ORDER = ["new","opener_sent","opener_nudged","confirmed","contacted","followup_1","followup_2","replied","won","lost","wrong_number","not_on_whatsapp","do_not_contact"];
 const LABEL = {new:"Not contacted yet",opener_sent:"Asked “is this still you?”",opener_nudged:"Nudged, no answer",confirmed:"Confirmed — reply going out",contacted:"Pitched",followup_1:"Follow-up 1 sent",followup_2:"Follow-up 2 sent",replied:"Replied — your turn",won:"Won",lost:"Lost",wrong_number:"Wrong number now",not_on_whatsapp:"Not on WhatsApp",do_not_contact:"Asked to stop"};
+const SOURCE = (x) => ({ai:"AI", template:"Atlas template", yours:"your template", "yours+ai":"your template + AI"}[x] || x);
+const MB = (n) => (n / 1048576).toFixed(1) + " MB";
+let last = null, profileShown = false, kindShown = "";
 const KIND = {opener:"is this still you?",opener_nudge:"nudge",pitch:"reply + pitch",first:"first message",followup_1:"follow-up 1",followup_2:"follow-up 2"};
 const WHY = {day_off:"Day off today.", before_start:"Not started yet today.", lunch:"Lunch break.", after_end:"Done for today.", quota_reached:"Today's quota is reached.", waiting:"Pausing between messages."};
 let busy = false, phones = [];
@@ -412,6 +543,36 @@ function writerHtml(w) {
   return h;
 }
 
+function keyHtml(w) {
+  return w.claude_key ? '<span class="ok">A key is saved.</span> It stays in the .env file on this PC and is never shown here.' : '<span class="mute">No key saved.</span>';
+}
+
+function mediaHtml(list) {
+  if (!list.length) return '<p class="mute">No videos or pictures yet.</p>';
+  return list.map((m) => '<div class="msg"><label class="row" style="margin:0"><input type="checkbox" data-media-toggle="' + esc(m.name) + '"' + (m.on ? " checked" : "") + "> " +
+    esc(m.name) + ' <span class="mute small">' + esc(m.kind) + " \u00b7 " + MB(m.size) + "</span></label>" +
+    (m.big ? '<p class="warn small">Over 16 MB: may arrive slowly or not play on older phones.</p>' : "") +
+    '<button class="link small" data-media-delete="' + esc(m.name) + '">Delete</button></div>').join("");
+}
+
+function showTemplate(kind) {
+  const t = (last && last.templates && last.templates[kind]) || null;
+  $("t-text").value = t ? t.text : "";
+  $("t-ai").checked = t ? t.ai : false;
+  $("t-media").checked = t ? t.media : false;
+  $("t-state").textContent = t ? "Using your template." : "No template yet: Atlas writes this one in its own words.";
+  $("t-samples").innerHTML = "";
+  $("t-out").textContent = "";
+  warnTemplate();
+  kindShown = kind;
+}
+
+function warnTemplate() {
+  const k = $("t-kind").value;
+  $("t-warn").textContent = ($("t-media").checked && (k === "opener" || k === "opener_nudge"))
+    ? "A video on the very first message usually reads as spam. Message 3 is the better place." : "";
+}
+
 function fillSelect(el, items, chosen) {
   if (el === document.activeElement) return;   // don't fight the person using it
   el.innerHTML = items.map((i) => '<option value="' + esc(i[0]) + '"' + (i[0] === chosen ? " selected" : "") + ">" + esc(i[1]) + "</option>").join("");
@@ -429,13 +590,22 @@ function render(s) {
   fillSelect($("w-claude"), Object.entries(w.claude_models), w.claude_model);
   fillSelect($("w-ollama"), [["", w.ollama_models.length ? "(choose)" : "(none installed)"]].concat(w.ollama_models.map((m) => [m, m])), w.ollama_model);
   $("w-status").innerHTML = writerHtml(w);
+  $("k-out").innerHTML = $("k-out").dataset.hold ? $("k-out").innerHTML : keyHtml(w);
+  if ($("o-url") !== document.activeElement && !$("o-url").value) $("o-url").value = w.ollama_url;
+  if (!profileShown && s.profile) {
+    for (const k of Object.keys(s.profile)) $("p-" + k).value = s.profile[k];
+    profileShown = true;
+  }
+  last = s;
+  if (!kindShown) showTemplate($("t-kind").value || "opener");
+  $("m-list").innerHTML = mediaHtml(s.media || []);
   $("stages").innerHTML = ORDER.map((k) => "<tr><td>" + LABEL[k] + "</td><td>" + (s.stages[k] || 0) + "</td></tr>").join("");
   $("lists").innerHTML = s.lists.length ? "<p>" + s.lists.map((l) => esc(phoneName(l.account)) + ": " + esc(l.list_name || "(no list name)") + " — " + l.n).join("<br>") + "</p>" : "";
   $("replied").innerHTML = s.replied.length ? s.replied.map((r) =>
     '<div class="msg"><b>' + esc(r.name) + "</b> " + '<span class="mute small">' + esc(r.phone) + " · " + esc(phoneName(r.account)) + "</span><p>" + esc(r.last_text) + '</p><div class="row"><button data-mark="won" data-lead="' + r.id + '">Won</button><button data-mark="lost" data-lead="' + r.id + '">Not now</button><button data-mark="stop" data-lead="' + r.id + '">Don’t contact</button></div></div>'
   ).join("") : '<p class="mute">Nobody waiting on you.</p>';
   $("queue").innerHTML = s.queue.length ? s.queue.map((q) =>
-    '<div class="msg"><span>' + esc(q.name) + (q.company ? " · " + esc(q.company) : "") + '</span> <span class="mute small">' + esc(phoneName(q.account)) + " · " + esc(KIND[q.kind] || q.kind) + " · " + (q.source === "ai" ? "AI" : "template") + "</span><p>" + esc(q.text) + "</p></div>"
+    '<div class="msg"><span>' + esc(q.name) + (q.company ? " · " + esc(q.company) : "") + '</span> <span class="mute small">' + esc(phoneName(q.account)) + " · " + esc(KIND[q.kind] || q.kind) + " · " + (q.source === "ai" ? "AI" : "template") + "</span><p>" + esc(q.text) + "</p>" + (q.media ? '<p class="small mute">\ud83d\udcce ' + esc(q.media) + "</p>" : "") + "</div>"
   ).join("") : '<p class="mute">Nothing waiting. Add contacts, then Run.</p>';
   $("feed").innerHTML = s.activity.length ? s.activity.map((a) =>
     '<div class="msg"><span class="' + (a.dir === "in" ? "ok" : "mute") + '">' + (a.dir === "in" ? "← " : "→ ") + esc(a.name) + " " + esc(a.phone) + '</span> <span class="mute small">' + esc(phoneName(a.account)) + " · " + esc(when(a.at)) + (a.intent ? " · " + esc(a.intent) : "") + (a.source ? " · " + (a.source === "ai" ? "AI" : "template") : "") + "</span><p>" + esc(a.text) + "</p></div>"
@@ -453,6 +623,8 @@ document.addEventListener("click", async (e) => {
   if (t.dataset && t.dataset.rename) {
     const name = window.prompt("Name for this phone", phoneName(t.dataset.rename));
     if (name) { await post("/api/rename", {phone: t.dataset.rename, name: name}); refresh(); }
+  } else if (t.dataset && t.dataset.mediaDelete) {
+    if (window.confirm("Delete " + t.dataset.mediaDelete + "?")) { await post("/api/media-delete", {name: t.dataset.mediaDelete}); refresh(); }
   } else if (t.dataset && t.dataset.mark) {
     await post("/api/mark", {lead: Number(t.dataset.lead), outcome: t.dataset.mark}); refresh();
   }
@@ -491,6 +663,79 @@ for (const id of ["w-mode", "w-claude", "w-ollama"]) {
     $("w-status").innerHTML = writerHtml(w);
   };
 }
+$("k-save").onclick = async () => {
+  const r = await post("/api/key", {key: $("k-key").value});
+  $("k-key").value = "";
+  $("k-out").dataset.hold = "1";
+  $("k-out").innerHTML = r.error ? '<span class="bad">' + esc(r.error) + "</span>"
+    : (r.test && r.test.ok ? '<span class="ok">Saved. ' + esc(r.test.message) + "</span>"
+       : '<span class="warn">Saved, but the test failed: ' + esc(r.test ? r.test.message : "") + "</span>");
+  setTimeout(() => { delete $("k-out").dataset.hold; }, 8000);
+  refresh();
+};
+$("k-test").onclick = async () => {
+  const r = await post("/api/test-claude");
+  $("k-out").dataset.hold = "1";
+  $("k-out").innerHTML = (r.ok ? '<span class="ok">' : '<span class="bad">') + esc(r.message) + "</span>";
+  setTimeout(() => { delete $("k-out").dataset.hold; }, 8000);
+};
+$("k-remove").onclick = async () => {
+  if (!window.confirm("Remove the saved Claude key from this PC?")) return;
+  await post("/api/key-remove"); refresh();
+};
+$("o-test").onclick = async () => {
+  await post("/api/writer", {ollama_url: $("o-url").value});
+  const r = await post("/api/test-ollama");
+  $("o-out").innerHTML = (r.ok ? '<span class="ok">' : '<span class="bad">') + esc(r.message) + "</span>";
+  refresh();
+};
+$("p-save").onclick = async () => {
+  const body = {};
+  for (const k of ["owner_name", "sender_name", "offer", "opt_out_line"]) body[k] = $("p-" + k).value;
+  const r = await post("/api/profile", body);
+  for (const k of Object.keys(r)) $("p-" + k).value = r[k];
+  $("p-out").innerHTML = '<span class="ok">Saved.</span> Messages already queued keep the old wording until you press \u201cRewrite queued messages\u201d.';
+};
+
+$("t-kind").onchange = () => showTemplate($("t-kind").value);
+$("t-media").onchange = warnTemplate;
+$("t-save").onclick = async () => {
+  const r = await post("/api/template", {kind: $("t-kind").value, text: $("t-text").value, ai: $("t-ai").checked, media: $("t-media").checked});
+  if (r.error) { $("t-out").innerHTML = '<span class="bad">' + esc(r.error) + "</span>"; return; }
+  last.templates = r.templates;
+  $("t-state").textContent = $("t-text").value.trim() ? "Using your template." : "No template yet: Atlas writes this one in its own words.";
+  $("t-out").innerHTML = '<span class="ok">Saved.</span> New messages use it. Press \u201cRewrite queued messages\u201d to redo ones already waiting.';
+};
+$("t-preview").onclick = async () => {
+  const r = await post("/api/template-preview", {text: $("t-text").value});
+  $("t-samples").innerHTML = r.samples.length ? r.samples.map((x) => '<div class="msg"><span class="mute small">' + esc(x.name) + "</span><p>" + esc(x.text) + "</p></div>").join("") + '<p class="mute small">Without the AI touch. With it on, each one is also lightly reworded.</p>' : '<p class="mute">Write something first.</p>';
+};
+$("t-redo").onclick = async () => {
+  if (!window.confirm("Throw away messages waiting to be sent, so they are written again with your current wording?")) return;
+  const r = await post("/api/redo-queue");
+  $("t-out").innerHTML = '<span class="ok">' + r.cleared + " queued message(s) will be rewritten on the next run.</span>";
+  refresh();
+};
+
+$("m-upload").onclick = async () => {
+  const files = Array.from($("m-file").files || []);
+  if (!files.length) { $("m-out").textContent = "Choose one or more files first."; return; }
+  const results = [];
+  for (const f of files) {
+    $("m-out").textContent = "Uploading " + f.name + "\u2026";
+    const r = await (await fetch("/api/media-upload?name=" + encodeURIComponent(f.name),
+      {method: "POST", headers: {"X-Atlas": "1", "Content-Type": "application/octet-stream"}, body: f})).json();
+    results.push(r.error ? f.name + ": " + r.error : "Added " + r.name + (r.big ? " (over 16 MB)" : ""));
+  }
+  $("m-out").textContent = results.join(" \u00b7 ");
+  $("m-file").value = "";
+  refresh();
+};
+document.addEventListener("change", async (e) => {
+  const t = e.target;
+  if (t.dataset && t.dataset.mediaToggle) { await post("/api/media-toggle", {name: t.dataset.mediaToggle, on: t.checked}); refresh(); }
+});
+
 refresh();
 setInterval(refresh, 3000);
 </script></body></html>
