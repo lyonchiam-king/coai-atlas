@@ -60,6 +60,24 @@ you chose that). Keep the three minimised "Atlas relay" windows open. Logs: `rel
 **Updating:** copy a new version over the folder. Never delete `atlas.db`, `.env` or
 `whatsapp-relay\.whatsapp-session*` -- your contacts, key and phone links.
 
+## Start it (Mac)
+
+1. Unzip Atlas, e.g. into your home folder, so you have a `COAI-Atlas` folder.
+2. **Right-click `Setup.command` -> Open -> Open.** (A plain double-click is refused the first
+   time because the file came from the internet; after setup, double-clicks work.)
+   It installs Python and Node.js if missing (your Mac password may be asked once), the
+   WhatsApp relay and the AI library, asks for your Claude key (or skip), offers Ollama,
+   adds **COAI Atlas** to the Desktop and optionally to Login Items, then starts Atlas.
+3. Same as Windows from here: scan each phone's QR on the page, add contacts, read
+   **Next to send**, then **Run now** or **Auto-run**.
+
+Keep the Atlas Terminal window open: closing it stops Atlas and its relays. While it is open
+the Mac stays awake by itself.
+
+**Windows and Mac are separate copies.** Each has its own contacts, settings and phone links.
+Never run Atlas on both with the same phones: both would message the same people.
+To move: copy `atlas.db`, `.env`, `media` and `whatsapp-relay/.whatsapp-session*` across.
+
 ## Settings (on the page)
 
 - **Who writes the messages:** Automatic, Claude, Ollama, or templates only.
@@ -106,6 +124,8 @@ PYTHONPATH=src python -m atlas serve        # or: import <file> --phone 2 --list
   are first tested on your PC. The Baileys calls were read from the installed library (6.7.24),
   not exercised.
 - No real Claude or Ollama call has been made from here; both are tested against stand-ins.
+- `Setup.command` has never been run on a Mac (no Mac here; python.org and ollama.com
+  downloads are blocked from this container). `Atlas.command` was run for real on Linux.
 - `Setup.bat`, `setup.ps1` and `Atlas.bat` have never been run on Windows. `setup.ps1` was
   parsed and its Python detection exercised under PowerShell 7 on Linux, not 5.1 on Windows.
 - Replies from contacts WhatsApp identifies only by an `@lid` id (no number) are skipped.

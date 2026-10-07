@@ -35,3 +35,5 @@ Python 3.11+, stdlib only except the optional `anthropic` SDK (imported lazily),
   (links, numbers, length, word overlap). A failed gate sends the owner's words, never the AI's.
 - Media: the relay takes bare file names only and resolves them inside MEDIA_DIR (`media.js`);
   a missing file sends the text alone with a warning. Never pass paths over HTTP.
+- Mac launchers (`Setup.command`, `Atlas.command`): LF, executable, bash 3.2. Never run
+  /usr/bin/python3 (opens the developer-tools dialog). Atlas.command uses `.venv/bin/python`.
